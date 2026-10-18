@@ -1,0 +1,4 @@
+version: 1
+bundleID: com.larryw.Trip
+infoPath: Info.plist
+iconPath: Resources/AppIcon.png

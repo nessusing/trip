@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>Trip</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Trip uses your location to show gas stations, EV chargers, rest areas and washrooms near you.</string>
+    <!-- Lets canOpenURL detect whether Google Maps is installed. -->
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>comgooglemaps</string>
+    </array>
+</dict>
+</plist>

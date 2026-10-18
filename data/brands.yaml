@@ -1,0 +1,40 @@
+# Toilet inference rules used by build.py.
+#
+# A place matching one of these rules is assumed to have a washroom even when
+# OSM doesn't say so. Inferred washrooms are labelled "inferred" in the app.
+# An explicit OSM `toilets=no` always wins over these rules.
+#
+# access: public | customers | unknown
+
+# Matched case-insensitively against the OSM `brand` tag (falls back to `name`).
+brands:
+  # Coffee / fast food
+  - { name: "Tim Hortons", access: customers }
+  - { name: "McDonald's", access: customers }
+  - { name: "Starbucks", access: customers }
+  - { name: "A&W", access: customers }
+  - { name: "Wendy's", access: customers }
+  - { name: "Burger King", access: customers }
+  - { name: "Denny's", access: customers }
+  - { name: "White Spot", access: customers }
+  - { name: "Triple O's", access: customers }
+  - { name: "Boston Pizza", access: customers }
+  - { name: "Earls", access: customers }
+  - { name: "Cactus Club Cafe", access: customers }
+  - { name: "IKEA", access: customers }
+  - { name: "Costco", access: customers }
+  # Gas stations
+  - { name: "Shell", access: customers }
+  - { name: "Petro-Canada", access: customers }
+  - { name: "Chevron", access: customers }
+  - { name: "Esso", access: customers }
+  - { name: "Husky", access: customers }
+  - { name: "Mobil", access: customers }
+  - { name: "Co-op", access: customers }
+
+# Matched against OSM tags. `tag: value` must be present on the element.
+categories:
+  - { tag: amenity, value: library, access: public }
+  - { tag: amenity, value: community_centre, access: public }
+  - { tag: shop, value: mall, access: public }
+  - { tag: tourism, value: information, require: { information: office }, access: public }
