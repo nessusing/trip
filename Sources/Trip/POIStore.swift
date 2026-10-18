@@ -73,6 +73,11 @@ enum Geo {
         return 6_371_000 * 2 * asin(min(1, sqrt(h)))
     }
 
+    /// "100 m", "500 m", "1 km", "25 km".
+    static func format(radius km: Double) -> String {
+        km < 1 ? "\(Int((km * 1000).rounded())) m" : "\(Int(km.rounded())) km"
+    }
+
     static func format(distance metres: Double) -> String {
         if metres < 1000 {
             return "\(Int((metres / 10).rounded()) * 10) m"

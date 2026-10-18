@@ -51,11 +51,11 @@ struct NearbySheet: View {
                     Menu {
                         Picker("Radius", selection: $radiusKm) {
                             ForEach(ContentView.radiusOptions, id: \.self) { km in
-                                Text("\(Int(km)) km").tag(km)
+                                Text(Geo.format(radius: km)).tag(km)
                             }
                         }
                     } label: {
-                        Label("\(Int(radiusKm)) km", systemImage: "circle.dashed")
+                        Label(Geo.format(radius: radiusKm), systemImage: "circle.dashed")
                             .labelStyle(.titleAndIcon)
                     }
                 }

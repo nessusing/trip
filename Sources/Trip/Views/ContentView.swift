@@ -2,7 +2,7 @@ import CoreLocation
 import SwiftUI
 
 struct ContentView: View {
-    static let radiusOptions: [Double] = [2, 5, 10, 25, 50]
+    static let radiusOptions: [Double] = [0.1, 0.5, 1, 2, 5, 10, 25, 50]
 
     @Environment(POIStore.self) private var store
     @Environment(LocationManager.self) private var location
