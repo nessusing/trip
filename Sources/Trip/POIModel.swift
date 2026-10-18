@@ -20,7 +20,13 @@ struct POI: Decodable, Identifiable, Hashable {
     let lat: Double
     let lon: Double
     let address: String?
+    /// Opening hours as the source wrote them.
     let hours: String?
+    /// `hours` parsed into a weekly schedule; see `OpeningHours`. Nil if unparseable.
+    let open: [[[Int]]]?
+    /// For unnamed washrooms: the named park/facility it's in, and a nearby street.
+    let place: String?
+    let street: String?
     let source: String
     /// Venue subtype from OSM, e.g. "cafe" or "library"; "services" for service plazas.
     let sub: String?

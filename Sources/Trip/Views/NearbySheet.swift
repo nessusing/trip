@@ -91,7 +91,7 @@ struct POIRow: View {
                 Text(poi.displayName)
                     .font(.body.weight(.medium))
                     .lineLimit(1)
-                Text(subtitle(poi))
+                subtitle(poi)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -106,7 +106,15 @@ struct POIRow: View {
         .contentShape(Rectangle())
     }
 
-    private func subtitle(_ poi: POI) -> String {
+    private func subtitle(_ poi: POI) -> Text {
+        let details = Text(details(poi))
+        guard let status = item.status else { return details }
+        return Text(status.shortLabel(now: .now))
+            .foregroundStyle(status.isOpen ? Color.green : Color.red)
+            + Text(" · ") + details
+    }
+
+    private func details(_ poi: POI) -> String {
         var parts = [poi.kindLabel]
         if let ev = poi.ev {
             if let kw = ev.maxKW { parts.append("\(Int(kw)) kW") }
@@ -120,5 +128,16 @@ struct POIRow: View {
             parts.append(toilet.access == .customers ? "customers only" : "access unknown")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+extension OpenStatus {
+    /// Compact form for list rows: "Open 24h", "Open until 10 PM", "Closed".
+    func shortLabel(now: Date) -> String {
+        switch self {
+        case .alwaysOpen: "Open 24h"
+        case .open: label(now: now)
+        case .closed: "Closed"
+        }
     }
 }

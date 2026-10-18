@@ -94,3 +94,27 @@ def test_far_apart_toilets_are_not_merged():
     a = osm({"amenity": "toilets"}, id=1)
     b = osm({"amenity": "toilets"}, id=2, lat=49.29)
     assert len(build.merge([a, b], build.same_place)) == 2
+
+
+def test_parse_context_prefers_specific_place_and_first_street():
+    elements = [
+        {"type": "node", "id": 1},
+        {"type": "area", "id": 9, "tags": {"name": "Stanley Park", "leisure": "park"}},
+        {"type": "area", "id": 8, "tags": {"name": "Second Beach", "natural": "beach"}},
+        {"type": "way", "id": 7, "tags": {"name": "Seawall", "highway": "footway"}},
+        {"type": "way", "id": 2},
+        {"type": "way", "id": 6, "tags": {"name": "Homer Street", "highway": "residential"}},
+        {"type": "node", "id": 3},
+    ]
+    assert build.parse_context(elements) == {
+        "n1": {"place": "Second Beach", "street": "Seawall"},
+        "w2": {"street": "Homer Street"},
+        "n3": {},
+    }
+
+
+def test_unnamed_toilet_gets_context():
+    el = {"type": "node", "id": 5, "lat": 49.3, "lon": -123.1, "tags": {"amenity": "toilets"}}
+    poi = build.osm_element_to_poi(el, RULES, {"n5": {"place": "Stanley Park"}})
+    assert poi["place"] == "Stanley Park"
+    assert poi["street"] is None

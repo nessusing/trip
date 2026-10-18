@@ -11,6 +11,9 @@ struct ContentView: View {
     @AppStorage("radiusKm") private var radiusKm = 10.0
     @AppStorage("categories") private var categoriesRaw = Category.allCases.map(\.rawValue).joined(separator: ",")
     @AppStorage("publicToiletsOnly") private var publicToiletsOnly = false
+    @AppStorage("openNow") private var openNow = false
+    @AppStorage("fastChargingOnly") private var fastChargingOnly = false
+    @AppStorage("connectors") private var connectorsRaw = ""
 
     /// The centre of the map, which is also the centre of the search circle.
     @State private var searchCenter = Geo.downtownVancouver
@@ -18,27 +21,37 @@ struct ContentView: View {
     @State private var hasCenteredOnUser = false
     @State private var selected: POI?
     @State private var detent: PresentationDetent = Self.collapsed
+    /// Bottom edge of the filter chips, in screen points.
+    @State private var chipsBottom: CGFloat = 100
 
-    static let collapsed = PresentationDetent.height(150)
+    static let collapsedHeight: CGFloat = 150
+    static let collapsed = PresentationDetent.height(collapsedHeight)
 
-    private var categories: Set<Category> {
-        Set(categoriesRaw.split(separator: ",").compactMap { Category(rawValue: String($0)) })
+    private var filters: Filters {
+        Filters(
+            categories: Set(categoriesRaw.split(separator: ",").compactMap { Category(rawValue: String($0)) }),
+            publicToiletsOnly: publicToiletsOnly,
+            openNow: openNow,
+            fastChargingOnly: fastChargingOnly,
+            connectors: Set(connectorsRaw.split(separator: ",").map(String.init))
+        )
     }
 
-    private var categoriesBinding: Binding<Set<Category>> {
+    private var filtersBinding: Binding<Filters> {
         Binding(
-            get: { categories },
-            set: { categoriesRaw = Category.allCases.filter($0.contains).map(\.rawValue).joined(separator: ",") }
+            get: { filters },
+            set: { new in
+                categoriesRaw = Category.allCases.filter(new.categories.contains).map(\.rawValue).joined(separator: ",")
+                publicToiletsOnly = new.publicToiletsOnly
+                openNow = new.openNow
+                fastChargingOnly = new.fastChargingOnly
+                connectorsRaw = Filters.allConnectors.filter(new.connectors.contains).joined(separator: ",")
+            }
         )
     }
 
     private var items: [NearbyPOI] {
-        store.nearby(
-            center: searchCenter,
-            radiusKm: radiusKm,
-            categories: categories,
-            publicToiletsOnly: publicToiletsOnly
-        )
+        store.nearby(center: searchCenter, radiusKm: radiusKm, filters: filters)
     }
 
     var body: some View {
@@ -49,13 +62,19 @@ struct ContentView: View {
                 searchCenter: searchCenter,
                 radiusKm: radiusKm,
                 camera: camera,
+                // The chips cover the top of the map and the collapsed sheet the
+                // bottom; the search circle is centred in what's left.
+                obscured: UIEdgeInsets(top: chipsBottom, left: 0, bottom: Self.collapsedHeight, right: 0),
                 selected: $selected,
                 onCenterChange: { searchCenter = $0 }
             )
             .ignoresSafeArea()
 
             VStack(alignment: .trailing, spacing: 10) {
-                FilterBar(categories: categoriesBinding, publicToiletsOnly: $publicToiletsOnly)
+                FilterBar(filters: filtersBinding)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: {
+                        chipsBottom = $0
+                    }
                 RecenterButton(enabled: location.coordinate != nil) { recenter() }
                     .padding(.trailing, 12)
             }

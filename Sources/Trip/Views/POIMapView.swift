@@ -20,6 +20,8 @@ struct POIMapView: UIViewRepresentable {
     let searchCenter: CLLocationCoordinate2D
     let radiusKm: Double
     let camera: CameraRequest?
+    /// Screen edges covered by other UI. The search centre is the middle of the rest.
+    let obscured: UIEdgeInsets
     @Binding var selected: POI?
     /// Called when the user finishes moving the map.
     let onCenterChange: (CLLocationCoordinate2D) -> Void
@@ -42,14 +44,12 @@ struct POIMapView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.parent = self
 
+        // Moves the Apple logo, Legal link and compass out from under our UI.
+        if map.layoutMargins != obscured { map.layoutMargins = obscured }
+
         if let camera, camera.id != coordinator.lastCameraID {
             coordinator.lastCameraID = camera.id
-            let span = camera.radiusKm * 2000 * 1.15
-            map.setRegion(
-                MKCoordinateRegion(center: camera.center, latitudinalMeters: span, longitudinalMeters: span),
-                animated: coordinator.hasPositioned
-            )
-            coordinator.hasPositioned = true
+            coordinator.move(map, to: camera)
         }
 
         coordinator.updateCircle(on: map, center: searchCenter, radiusKm: radiusKm)
@@ -63,13 +63,40 @@ struct POIMapView: UIViewRepresentable {
 
         var parent: POIMapView
         var lastCameraID: UUID?
-        var hasPositioned = false
+        private var hasPositioned = false
         private var annotations: [String: POIAnnotation] = [:]
         private var circle: MKCircle?
         private var circleKey: (Double, Double, Double)?
 
         init(_ parent: POIMapView) {
             self.parent = parent
+        }
+
+        /// Fits the search circle into the unobscured part of the map.
+        func move(_ map: MKMapView, to camera: CameraRequest, attempt: Int = 0) {
+            // Before the first layout the map has no size to fit into; retry shortly.
+            guard map.bounds.height > parent.obscured.top + parent.obscured.bottom + 50 else {
+                if attempt < 20 {
+                    DispatchQueue.main.async { self.move(map, to: camera, attempt: attempt + 1) }
+                }
+                return
+            }
+            let circle = MKCircle(center: camera.center, radius: camera.radiusKm * 1000)
+            let insets = parent.obscured
+            map.setVisibleMapRect(
+                circle.boundingMapRect,
+                edgePadding: UIEdgeInsets(top: insets.top + 12, left: 16, bottom: insets.bottom + 12, right: 16),
+                animated: hasPositioned
+            )
+            hasPositioned = true
+        }
+
+        /// The point on screen the search centre sits under.
+        private func searchPoint(in map: MKMapView) -> CGPoint {
+            let insets = parent.obscured
+            let visible = map.bounds.height - insets.top - insets.bottom
+            guard visible > 50 else { return CGPoint(x: map.bounds.midX, y: map.bounds.midY) }
+            return CGPoint(x: map.bounds.midX, y: insets.top + visible / 2)
         }
 
         func updateCircle(on map: MKMapView, center: CLLocationCoordinate2D, radiusKm: Double) {
@@ -109,7 +136,7 @@ struct POIMapView: UIViewRepresentable {
         // selectAnnotation), so state changes are deferred to the next run loop.
 
         func mapView(_ map: MKMapView, regionDidChangeAnimated animated: Bool) {
-            let center = map.centerCoordinate
+            let center = map.convert(searchPoint(in: map), toCoordinateFrom: map)
             DispatchQueue.main.async { self.parent.onCenterChange(center) }
         }
 

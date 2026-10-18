@@ -19,6 +19,11 @@ struct POIDetailView: View {
                         Text([poi.kindLabel, distance.map { Geo.format(distance: $0) }]
                             .compactMap { $0 }.joined(separator: " · "))
                             .foregroundStyle(.secondary)
+                        if let status = poi.openStatus(at: .now) {
+                            Text(status.label(now: .now))
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(status.isOpen ? .green : .red)
+                        }
                     }
                 }
                 Button {
@@ -34,6 +39,8 @@ struct POIDetailView: View {
 
             Section {
                 Field("Address", poi.address)
+                Field("In", poi.name == nil ? nil : poi.place)
+                Field("Near", poi.address == nil ? poi.street : nil)
                 Field("Hours", poi.hours)
             }
 

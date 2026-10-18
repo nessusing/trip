@@ -5,7 +5,8 @@
 """Build the app's POI data file from open data sources.
 
     uv run data/build.py            # reuse cached downloads in data/cache/
-    uv run data/build.py --refresh  # download everything again
+    uv run data/build.py --refresh  # download everything again (except washroom
+                                    # locations, see --refresh-context)
 
 Optional environment variables:
     AFDC_API_KEY  key for developer.nlr.gov (defaults to the rate-limited DEMO_KEY)
@@ -28,6 +29,8 @@ from pathlib import Path
 import requests
 import yaml
 
+from hours import ALWAYS, parse_afdc, parse_osm, parse_vancouver
+
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "data" / "cache"
 RULES_PATH = ROOT / "data" / "brands.yaml"
@@ -43,6 +46,10 @@ OVERPASS_ENDPOINTS = [
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 ]
+
+# Unnamed washrooms looked up per Overpass query when finding nearby park and
+# street names. Each batch takes a minute or two.
+CONTEXT_BATCH = 300
 
 DEDUP_RADIUS_M = {"restArea": 300}
 DEFAULT_DEDUP_RADIUS_M = 50
@@ -114,6 +121,94 @@ def fetch_overpass(query: str) -> dict:
             time.sleep(delay)
             delay = min(delay * 2, 240)
     raise RuntimeError("all Overpass endpoints failed")
+
+
+def context_query(keys: list[str]) -> str:
+    """For each washroom, find the named park/facility it's in and a nearby street."""
+    nodes = ",".join(k[1:] for k in keys if k[0] == "n")
+    ways = ",".join(k[1:] for k in keys if k[0] == "w")
+    targets = (f"node(id:{nodes});" if nodes else "") + (f"way(id:{ways});" if ways else "")
+    return f"""
+[out:json][timeout:900];
+({targets})->.t;
+foreach.t->.x(
+  .x out ids;
+  (.x; node(w.x);)->.pts;
+  .pts is_in->.a;
+  (
+    area.a["leisure"]["name"];
+    area.a["natural"="beach"]["name"];
+    area.a["tourism"]["name"];
+    area.a["amenity"]["name"];
+    area.a["landuse"="recreation_ground"]["name"];
+  );
+  out tags;
+  way(around.x:60)["highway"]["name"];
+  out tags 1;
+);
+"""
+
+
+def _place_rank(tags: dict) -> int:
+    """Lower is better: prefer the most specific named area."""
+    if "amenity" in tags or "tourism" in tags:
+        return 0
+    if tags.get("natural") == "beach":
+        return 1
+    if "leisure" in tags and tags["leisure"] != "park":
+        return 2
+    if tags.get("leisure") == "park":
+        return 3
+    return 4
+
+
+def parse_context(elements: list[dict]) -> dict[str, dict]:
+    """Turn the foreach output stream into {"n123": {"place": ..., "street": ...}}.
+
+    Each washroom appears untagged (`out ids`), followed by the tagged areas
+    and road found for it.
+    """
+    result: dict[str, dict] = {}
+    current = None
+    best_rank = 99
+    for el in elements:
+        tags = el.get("tags")
+        if not tags:
+            current = f"{el['type'][0]}{el['id']}"
+            result[current] = {}
+            best_rank = 99
+        elif current is None:
+            continue
+        elif "highway" in tags:
+            result[current].setdefault("street", tags["name"])
+        elif _place_rank(tags) < best_rank:
+            best_rank = _place_rank(tags)
+            result[current]["place"] = tags["name"]
+    return result
+
+
+def load_context(keys: list[str], refresh: bool) -> dict[str, dict]:
+    """Nearby park/street names for unnamed washrooms, cached per washroom.
+
+    Only washrooms missing from the cache are looked up, so after the first
+    run (about half an hour for BC) only new ones cost anything.
+    """
+    path = CACHE_DIR / "osm_context.json"
+    context = {} if refresh or not path.exists() else json.loads(path.read_text())
+    missing = [k for k in keys if k not in context]
+    if not missing:
+        print("  osm_context: using cache")
+        return context
+    batches = [missing[i:i + CONTEXT_BATCH] for i in range(0, len(missing), CONTEXT_BATCH)]
+    print(f"  osm_context: looking up {len(missing)} washrooms in {len(batches)} batches...")
+    for n, batch in enumerate(batches, 1):
+        found = parse_context(fetch_overpass(context_query(batch))["elements"])
+        for key in batch:
+            context[key] = found.get(key, {})
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(context))
+        print(f"    batch {n}/{len(batches)} done")
+    return context
 
 
 def fetch_afdc() -> dict:
@@ -259,7 +354,16 @@ def osm_toilet(kind: str, tags: dict, rules: ToiletRules) -> dict | None:
     return info
 
 
-def osm_element_to_poi(el: dict, rules: ToiletRules) -> dict | None:
+def osm_key(el: dict) -> str:
+    return f"{el['type'][0]}{el['id']}"
+
+
+def needs_context(el: dict) -> bool:
+    tags = el.get("tags", {})
+    return tags.get("amenity") == "toilets" and not tags.get("name")
+
+
+def osm_element_to_poi(el: dict, rules: ToiletRules, context: dict | None = None) -> dict | None:
     tags = el.get("tags", {})
     lat = el.get("lat", el.get("center", {}).get("lat"))
     lon = el.get("lon", el.get("center", {}).get("lon"))
@@ -272,16 +376,21 @@ def osm_element_to_poi(el: dict, rules: ToiletRules) -> dict | None:
         return None
 
     poi = {
-        "id": f"osm:{el['type'][0]}{el['id']}",
+        "id": f"osm:{osm_key(el)}",
         "kind": kind,
         "name": tags.get("name") or tags.get("brand"),
         "lat": round(lat, 6),
         "lon": round(lon, 6),
         "address": osm_address(tags),
         "hours": tags.get("opening_hours"),
+        "open": parse_osm(tags.get("opening_hours")),
         "source": "osm",
         "toilet": toilet,
     }
+    if context and kind == "toilet":
+        found = context.get(osm_key(el), {})
+        poi["place"] = found.get("place")
+        poi["street"] = found.get("street")
     if kind == "venue":
         poi["sub"] = tags.get("amenity") or tags.get("shop") or tags.get("tourism")
     if kind == "fuel":
@@ -342,6 +451,7 @@ def afdc_to_poi(st: dict) -> dict:
         "lon": round(st["longitude"], 6),
         "address": ", ".join(p for p in (st.get("street_address"), st.get("city")) if p) or None,
         "hours": st.get("access_days_time"),
+        "open": parse_afdc(st.get("access_days_time")),
         "source": "afdc",
         "ev": {
             "connectors": connectors,
@@ -402,11 +512,13 @@ def vancouver_to_poi(row: dict) -> dict | None:
     return {
         "id": f"van:{lat:.5f},{lon:.5f}",
         "kind": "toilet",
-        "name": row.get("park_name") or "Public washroom",
+        "name": None,
+        "place": row.get("park_name"),
         "lat": lat,
         "lon": lon,
         "address": row.get("location"),
         "hours": hours,
+        "open": parse_vancouver(summer, winter),
         "source": "vancouver",
         "toilet": {
             "access": "public",
@@ -436,6 +548,7 @@ def rest_area_to_poi(feature: dict) -> dict:
         "lon": round(lon, 6),
         "address": p.get("DISTANCE_FROM_MUNICIPALITY", "").title() or None,
         "hours": hours,
+        "open": ALWAYS if year_round else None,
         "source": "databc",
         "toilet": {
             "access": "public",
@@ -555,6 +668,8 @@ def strip_nones(value):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--refresh", action="store_true", help="ignore cached downloads")
+    parser.add_argument("--refresh-context", action="store_true",
+                        help="look up park/street names for unnamed washrooms again (slow)")
     args = parser.parse_args()
 
     rules_yaml = yaml.safe_load(RULES_PATH.read_text())
@@ -570,8 +685,12 @@ def main() -> None:
     if not ocm_key:
         print("  ocm: skipped (set OCM_API_KEY to include Open Charge Map)")
 
+    context = load_context(
+        [osm_key(el) for el in osm["elements"] if needs_context(el)], args.refresh_context
+    )
+
     pois: list[dict] = []
-    pois += [p for el in osm["elements"] if (p := osm_element_to_poi(el, rules))]
+    pois += [p for el in osm["elements"] if (p := osm_element_to_poi(el, rules, context))]
     pois += [afdc_to_poi(st) for st in afdc["fuel_stations"]]
     pois += [p for row in vancouver if (p := vancouver_to_poi(row))]
     pois += [rest_area_to_poi(f) for f in rest_areas["features"]]

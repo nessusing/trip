@@ -2,10 +2,12 @@ import CoreLocation
 import Foundation
 import Observation
 
-struct NearbyPOI: Identifiable, Hashable {
+struct NearbyPOI: Identifiable, Equatable {
     let poi: POI
     /// Metres from the search centre.
     let distance: Double
+    /// Open or closed at query time; nil when the hours are unknown.
+    let status: OpenStatus?
 
     var id: String { poi.id }
 }
@@ -34,12 +36,12 @@ final class POIStore {
         }
     }
 
-    /// POIs within `radiusKm` of `center` matching any of `categories`, nearest first.
+    /// POIs within `radiusKm` of `center` that pass `filters`, nearest first.
     func nearby(
         center: CLLocationCoordinate2D,
         radiusKm: Double,
-        categories: Set<Category>,
-        publicToiletsOnly: Bool
+        filters: Filters,
+        now: Date = .now
     ) -> [NearbyPOI] {
         let radius = radiusKm * 1000
         // Cheap bounding-box test before the exact distance.
@@ -50,12 +52,13 @@ final class POIStore {
         for poi in pois {
             guard abs(poi.lat - center.latitude) <= latDelta,
                   abs(poi.lon - center.longitude) <= lonDelta,
-                  categories.contains(where: { poi.matches($0, publicToiletsOnly: publicToiletsOnly) })
+                  filters.categories.contains(where: { poi.matches($0, filters) })
             else { continue }
             let d = Geo.distance(center, poi.coordinate)
-            if d <= radius {
-                result.append(NearbyPOI(poi: poi, distance: d))
-            }
+            guard d <= radius else { continue }
+            let status = poi.openStatus(at: now)
+            if filters.openNow && status?.isOpen == false { continue }
+            result.append(NearbyPOI(poi: poi, distance: d, status: status))
         }
         return result.sorted { $0.distance < $1.distance }
     }
