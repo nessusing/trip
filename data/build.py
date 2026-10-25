@@ -54,9 +54,14 @@ NATURAL_EARTH_URL = (
 
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 ]
+
+# Public Overpass servers are often at capacity for a while at a time. Keep
+# cycling through them for this long before giving up on a query.
+OVERPASS_PATIENCE_S = 60 * 60
 
 # Unnamed washrooms looked up per Overpass query when finding nearby park and
 # street names. Each batch takes a minute or two.
@@ -117,7 +122,7 @@ def region_rules(rules: dict, region_id: str) -> dict:
 # --------------------------------------------------------------------------
 
 def get_json(url: str, *, params: dict | None = None, data: dict | None = None,
-             timeout: int = 120) -> object:
+             timeout: float | tuple[float, float] = 120) -> object:
     headers = {"User-Agent": USER_AGENT}
     if data is not None:
         resp = requests.post(url, data=data, headers=headers, timeout=timeout)
@@ -167,16 +172,20 @@ def _regex_escape(s: str) -> str:
 
 
 def fetch_overpass(query: str) -> dict:
+    deadline = time.monotonic() + OVERPASS_PATIENCE_S
     delay = 15
-    for attempt in range(8):
+    attempt = 0
+    while True:
         url = OVERPASS_ENDPOINTS[attempt % len(OVERPASS_ENDPOINTS)]
         try:
-            return get_json(url, data={"data": query}, timeout=900)
+            return get_json(url, data={"data": query}, timeout=(30, 900))
         except (requests.RequestException, ValueError) as err:
+            if time.monotonic() + delay > deadline:
+                raise RuntimeError(f"Overpass still failing after {OVERPASS_PATIENCE_S // 60} min") from err
             print(f"    {url} failed ({err}); retrying in {delay}s")
             time.sleep(delay)
             delay = min(delay * 2, 240)
-    raise RuntimeError("all Overpass endpoints failed")
+            attempt += 1
 
 
 def context_query(keys: list[str]) -> str:
