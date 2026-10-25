@@ -59,9 +59,9 @@ OVERPASS_ENDPOINTS = [
     "https://overpass.private.coffee/api/interpreter",
 ]
 
-# Public Overpass servers are often at capacity for a while at a time. Keep
-# cycling through them for this long before giving up on a query.
-OVERPASS_PATIENCE_S = 60 * 60
+# Public Overpass servers are often at capacity. Each retry goes to the next
+# server; after this many the query fails and the next scheduled run tries again.
+OVERPASS_RETRIES = 2
 
 # Unnamed washrooms looked up per Overpass query when finding nearby park and
 # street names. Each batch takes a minute or two.
@@ -172,20 +172,16 @@ def _regex_escape(s: str) -> str:
 
 
 def fetch_overpass(query: str) -> dict:
-    deadline = time.monotonic() + OVERPASS_PATIENCE_S
-    delay = 15
-    attempt = 0
-    while True:
+    for attempt in range(OVERPASS_RETRIES + 1):
         url = OVERPASS_ENDPOINTS[attempt % len(OVERPASS_ENDPOINTS)]
         try:
-            return get_json(url, data={"data": query}, timeout=(30, 900))
+            # Queries set a 600 s server-side timeout; wait a little longer for it.
+            return get_json(url, data={"data": query}, timeout=(30, 660))
         except (requests.RequestException, ValueError) as err:
-            if time.monotonic() + delay > deadline:
-                raise RuntimeError(f"Overpass still failing after {OVERPASS_PATIENCE_S // 60} min") from err
-            print(f"    {url} failed ({err}); retrying in {delay}s")
-            time.sleep(delay)
-            delay = min(delay * 2, 240)
-            attempt += 1
+            print(f"    {url} failed ({err})")
+            if attempt < OVERPASS_RETRIES:
+                time.sleep(15 * 2 ** attempt)
+    raise RuntimeError(f"Overpass failed {OVERPASS_RETRIES + 1} times")
 
 
 def context_query(keys: list[str]) -> str:
@@ -194,7 +190,7 @@ def context_query(keys: list[str]) -> str:
     ways = ",".join(k[1:] for k in keys if k[0] == "w")
     targets = (f"node(id:{nodes});" if nodes else "") + (f"way(id:{ways});" if ways else "")
     return f"""
-[out:json][timeout:900];
+[out:json][timeout:600];
 ({targets})->.t;
 foreach.t->.x(
   .x out ids;
@@ -256,7 +252,8 @@ def load_context(keys: list[str], path: Path, refresh: bool) -> dict[str, dict]:
     """Nearby park/street names for unnamed washrooms, cached per washroom in `path`.
 
     Only washrooms missing from the cache are looked up, so after the first
-    run (about half an hour for BC) only new ones cost anything.
+    run (about half an hour for BC) only new ones cost anything. If Overpass
+    gives up, the rest are left unnamed until the next run.
     """
     context = {} if refresh or not path.exists() else json.loads(path.read_text())
     missing = [k for k in keys if k not in context]
@@ -266,7 +263,13 @@ def load_context(keys: list[str], path: Path, refresh: bool) -> dict[str, dict]:
     batches = [missing[i:i + CONTEXT_BATCH] for i in range(0, len(missing), CONTEXT_BATCH)]
     print(f"  osm_context: looking up {len(missing)} washrooms in {len(batches)} batches...")
     for n, batch in enumerate(batches, 1):
-        found = parse_context(fetch_overpass(context_query(batch))["elements"])
+        try:
+            found = parse_context(fetch_overpass(context_query(batch))["elements"])
+        except RuntimeError as err:
+            # Names are a nicety: publish without them, and since these washrooms
+            # stay out of the cache, the next run looks them up again.
+            print(f"    batch {n}/{len(batches)}: {err}; skipping the rest")
+            break
         for key in batch:
             context[key] = found.get(key, {})
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -154,3 +154,36 @@ def test_simplify_boundary_rounds_and_drops_collapsed_islets():
     assert result["coordinates"] == [[[[-123.0, 49.0], [-122.0, 49.0], [-122.0, 50.0], [-123.0, 50.0],
                                        [-123.0, 49.0]]]]
     assert build.bounding_box(result) == (49.0, -123.0, 50.0, -122.0)
+
+
+def test_overpass_gives_up_after_two_retries_on_different_servers(monkeypatch):
+    tried = []
+
+    def failing(url, **kwargs):
+        tried.append(url)
+        raise build.requests.HTTPError("502")
+
+    monkeypatch.setattr(build, "get_json", failing)
+    monkeypatch.setattr(build.time, "sleep", lambda s: None)
+    try:
+        build.fetch_overpass("q")
+        raise AssertionError("expected a failure")
+    except RuntimeError:
+        pass
+    assert tried == build.OVERPASS_ENDPOINTS[:3]
+
+
+def test_failed_context_lookup_keeps_earlier_batches_and_skips_the_rest(monkeypatch, tmp_path):
+    calls = []
+
+    def fetch(query):
+        calls.append(query)
+        if len(calls) == 2:
+            raise RuntimeError("Overpass failed 3 times")
+        return {"elements": []}
+
+    monkeypatch.setattr(build, "fetch_overpass", fetch)
+    monkeypatch.setattr(build, "CONTEXT_BATCH", 1)
+    context = build.load_context(["n1", "n2", "n3"], tmp_path / "ctx.json", refresh=False)
+    assert context == {"n1": {}}
+    assert len(calls) == 2
