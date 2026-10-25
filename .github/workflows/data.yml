@@ -18,6 +18,9 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  PYTHONUNBUFFERED: "1" # show progress in the log as it happens
+
 jobs:
   update:
     runs-on: ubuntu-24.04
