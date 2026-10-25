@@ -1,0 +1,71 @@
+# Rebuilds region data on a schedule and publishes it to the `data` branch,
+# which the app downloads from. Which regions and how often: data/regions.yaml.
+name: Data
+
+on:
+  schedule:
+    - cron: "17 11 * * *" # daily, around 4 am Pacific; regions rebuild when due
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: "Rebuild these regions now, comma-separated (e.g. bc,wa). Empty = only those due."
+        required: false
+        default: ""
+
+concurrency:
+  group: data
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      # v4 keeps the push credentials in .git/config, which the worktree below shares.
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Test data scripts
+        run: uv run --with pytest --with pyyaml --with requests pytest data
+
+      - name: Test hours logic and build the decode checker
+        run: |
+          scripts/test-swift.sh
+          scripts/build-decoder.sh "$RUNNER_TEMP/decoder"
+
+      # `site` starts as an orphan branch holding the current data-branch files,
+      # so each publish is a single commit with no history.
+      - name: Check out the data branch
+        run: |
+          git worktree add --detach site
+          cd site
+          git checkout -q --orphan data-next
+          git rm -rfq .
+          if git fetch -q --depth=1 origin +data:refs/remotes/origin/data; then
+            git checkout -q origin/data -- .
+          fi
+
+      - name: Rebuild due regions
+        env:
+          AFDC_API_KEY: ${{ secrets.AFDC_API_KEY }}
+          OCM_API_KEY: ${{ secrets.OCM_API_KEY }}
+          REGIONS: ${{ inputs.regions }}
+        run: uv run data/update.py --site site --decoder "$RUNNER_TEMP/decoder" ${REGIONS:+--regions "$REGIONS"}
+
+      # Runs even if a region failed: the others are still published.
+      - name: Publish
+        if: ${{ !cancelled() }}
+        working-directory: site
+        run: |
+          git add -A
+          if git rev-parse -q --verify origin/data >/dev/null && git diff --cached --quiet origin/data; then
+            echo "No changes"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -qm "Data $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q --force origin HEAD:data

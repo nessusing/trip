@@ -1,0 +1,28 @@
+# Regions the data workflow builds and publishes (see data/update.py).
+#
+# Edit this file on GitHub; the next daily run picks it up. To rebuild now, run
+# the "Data" workflow by hand (Actions tab) and list the region ids.
+#
+#   name         shown in the app
+#   country      ISO 3166-1 code; with `subdivision` it picks the Overpass area,
+#   subdivision  the AFDC query and the boundary (e.g. CA + BC = "CA-BC")
+#   sources      which data sources to use (order doesn't matter; which one
+#                wins on duplicates is SOURCE_PRIORITY in build.py). Available:
+#                osm, afdc, ocm (needs OCM_API_KEY), databc (BC rest areas),
+#                vancouver (City of Vancouver washrooms)
+#   every_days   rebuild interval; defaults to `every_days` below
+
+every_days: 3
+
+regions:
+  bc:
+    name: British Columbia
+    country: CA
+    subdivision: BC
+    sources: [osm, afdc, databc, vancouver]
+
+  wa:
+    name: Washington
+    country: US
+    subdivision: WA
+    sources: [osm, afdc]

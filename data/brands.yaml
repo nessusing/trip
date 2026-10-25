@@ -38,3 +38,17 @@ categories:
   - { tag: amenity, value: community_centre, access: public }
   - { tag: shop, value: mall, access: public }
   - { tag: tourism, value: information, require: { information: office }, access: public }
+
+# Extra brands per region (ids from regions.yaml). An entry with the same name
+# as a global brand replaces it in that region.
+regions:
+  wa:
+    brands:
+      - { name: "Jack in the Box", access: customers }
+      - { name: "Taco Bell", access: customers }
+      - { name: "Carl's Jr.", access: customers }
+      - { name: "Fred Meyer", access: customers }
+      # Truck stops
+      - { name: "Love's", access: customers }
+      - { name: "Pilot", access: customers }
+      - { name: "Flying J", access: customers }

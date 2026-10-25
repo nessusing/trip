@@ -2,17 +2,20 @@
 # requires-python = ">=3.11"
 # dependencies = ["requests>=2.31", "pyyaml>=6"]
 # ///
-"""Build the app's POI data file from open data sources.
+"""Build one region's POI data file from open data sources.
 
-    uv run data/build.py            # reuse cached downloads in data/cache/
-    uv run data/build.py --refresh  # download everything again (except washroom
-                                    # locations, see --refresh-context)
+    uv run data/build.py --region bc            # reuse cached downloads in data/cache/bc/
+    uv run data/build.py --region wa --refresh  # download everything again (except
+                                                # washroom locations, see --refresh-context)
+
+Regions are defined in data/regions.yaml. The scheduled GitHub workflow runs
+data/update.py, which calls this for each region that is due and publishes it.
 
 Optional environment variables:
     AFDC_API_KEY  key for developer.nlr.gov (defaults to the rate-limited DEMO_KEY)
-    OCM_API_KEY   key for Open Charge Map; skipped when unset
+    OCM_API_KEY   key for Open Charge Map; the ocm source is skipped when unset
 
-Output: Sources/Trip/Resources/pois.json
+Output: data/out/<region>.json (or --out)
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ import math
 import os
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,12 +38,19 @@ from hours import ALWAYS, parse_afdc, parse_osm, parse_vancouver
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "data" / "cache"
 RULES_PATH = ROOT / "data" / "brands.yaml"
-OUTPUT_PATH = ROOT / "Sources" / "Trip" / "Resources" / "pois.json"
+REGIONS_PATH = ROOT / "data" / "regions.yaml"
+OUT_DIR = ROOT / "data" / "out"
+
+# Bump when the region file format changes in a way older apps can't read.
+SCHEMA_VERSION = 1
 
 USER_AGENT = "TripApp/0.1 (personal iOS app; data build script)"
 
-# Bounding box around British Columbia: (south, west, north, east).
-BC_BBOX = (48.2, -139.1, 60.0, -114.0)
+# Province and state outlines, about 1 km precision. Public domain.
+NATURAL_EARTH_URL = (
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/"
+    "geojson/ne_50m_admin_1_states_provinces.geojson"
+)
 
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
@@ -53,6 +64,52 @@ CONTEXT_BATCH = 300
 
 DEDUP_RADIUS_M = {"restArea": 300}
 DEFAULT_DEDUP_RADIUS_M = 50
+
+
+# --------------------------------------------------------------------------
+# Regions and rules
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Region:
+    id: str
+    name: str
+    country: str
+    subdivision: str
+    sources: tuple[str, ...]
+    every_days: float
+
+    @property
+    def iso(self) -> str:
+        """ISO 3166-2 code, e.g. "CA-BC"."""
+        return f"{self.country}-{self.subdivision}"
+
+
+def load_regions(path: Path = REGIONS_PATH) -> dict[str, Region]:
+    config = yaml.safe_load(path.read_text())
+    default_days = config.get("every_days", 3)
+    regions = {}
+    for rid, r in config["regions"].items():
+        unknown = set(r["sources"]) - set(SOURCE_PRIORITY)
+        if unknown:
+            raise ValueError(f"{rid}: unknown sources {sorted(unknown)}")
+        regions[rid] = Region(
+            id=rid,
+            name=r["name"],
+            country=r["country"],
+            subdivision=r["subdivision"],
+            sources=tuple(r["sources"]),
+            every_days=r.get("every_days", default_days),
+        )
+    return regions
+
+
+def region_rules(rules: dict, region_id: str) -> dict:
+    """The global toilet rules with the region's brand overrides applied."""
+    extra = (rules.get("regions") or {}).get(region_id, {}).get("brands", [])
+    brands = {b["name"].casefold(): b for b in rules["brands"]}
+    brands.update({b["name"].casefold(): b for b in extra})
+    return {"brands": list(brands.values()), "categories": rules["categories"]}
 
 
 # --------------------------------------------------------------------------
@@ -70,36 +127,35 @@ def get_json(url: str, *, params: dict | None = None, data: dict | None = None,
     return resp.json()
 
 
-def cached(name: str, fetch, refresh: bool) -> object:
-    """Return the cached download `name`, fetching it first if needed."""
-    path = CACHE_DIR / f"{name}.json"
+def cached(path: Path, fetch, refresh: bool) -> object:
+    """Return the cached download at `path`, fetching it first if needed."""
     if path.exists() and not refresh:
-        print(f"  {name}: using cache")
+        print(f"  {path.stem}: using cache")
         return json.loads(path.read_text())
-    print(f"  {name}: downloading...")
+    print(f"  {path.stem}: downloading...")
     result = fetch()
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result))
     return result
 
 
-def overpass_query(rules: dict) -> str:
+def overpass_query(rules: dict, iso: str) -> str:
     brands = "|".join(_regex_escape(b["name"]) for b in rules["brands"])
     category_lines = "\n".join(
         "  nwr" + "".join(
             f'["{k}"="{v}"]' for k, v in {c["tag"]: c["value"], **c.get("require", {})}.items()
-        ) + "(area.bc);"
+        ) + "(area.r);"
         for c in rules["categories"]
     )
     return f"""
 [out:json][timeout:600];
-area["ISO3166-2"="CA-BC"]["admin_level"="4"]->.bc;
+area["ISO3166-2"="{iso}"]["admin_level"="4"]->.r;
 (
-  nwr["amenity"="fuel"](area.bc);
-  nwr["amenity"="toilets"](area.bc);
-  nwr["highway"~"^(rest_area|services)$"](area.bc);
-  nwr["toilets"="yes"](area.bc);
-  nwr["brand"~"^({brands})$",i](area.bc);
+  nwr["amenity"="fuel"](area.r);
+  nwr["amenity"="toilets"](area.r);
+  nwr["highway"~"^(rest_area|services)$"](area.r);
+  nwr["toilets"="yes"](area.r);
+  nwr["brand"~"^({brands})$",i](area.r);
 {category_lines}
 );
 out center tags;
@@ -187,13 +243,12 @@ def parse_context(elements: list[dict]) -> dict[str, dict]:
     return result
 
 
-def load_context(keys: list[str], refresh: bool) -> dict[str, dict]:
-    """Nearby park/street names for unnamed washrooms, cached per washroom.
+def load_context(keys: list[str], path: Path, refresh: bool) -> dict[str, dict]:
+    """Nearby park/street names for unnamed washrooms, cached per washroom in `path`.
 
     Only washrooms missing from the cache are looked up, so after the first
     run (about half an hour for BC) only new ones cost anything.
     """
-    path = CACHE_DIR / "osm_context.json"
     context = {} if refresh or not path.exists() else json.loads(path.read_text())
     missing = [k for k in keys if k not in context]
     if not missing:
@@ -205,20 +260,20 @@ def load_context(keys: list[str], refresh: bool) -> dict[str, dict]:
         found = parse_context(fetch_overpass(context_query(batch))["elements"])
         for key in batch:
             context[key] = found.get(key, {})
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(context))
         print(f"    batch {n}/{len(batches)} done")
     return context
 
 
-def fetch_afdc() -> dict:
+def fetch_afdc(region: Region) -> dict:
     return get_json(
         "https://developer.nlr.gov/api/alt-fuel-stations/v1.json",
         params={
-            "api_key": os.environ.get("AFDC_API_KEY", "DEMO_KEY"),
+            "api_key": os.environ.get("AFDC_API_KEY") or "DEMO_KEY",
             "fuel_type": "ELEC",
-            "country": "CA",
-            "state": "BC",
+            "country": region.country,
+            "state": region.subdivision,
             "status": "E",
             "access": "public",
             "limit": "all",
@@ -226,14 +281,14 @@ def fetch_afdc() -> dict:
     )
 
 
-def fetch_ocm(key: str) -> list:
-    s, w, n, e = BC_BBOX
+def fetch_ocm(key: str, region: Region, boundary: dict) -> list:
+    s, w, n, e = bounding_box(boundary)
     return get_json(
         "https://api.openchargemap.io/v3/poi/",
         params={
             "key": key,
             "output": "json",
-            "countrycode": "CA",
+            "countrycode": region.country,
             "boundingbox": f"({n},{w}),({s},{e})",
             "maxresults": 20000,
             "compact": "false",
@@ -261,6 +316,49 @@ def fetch_rest_areas() -> dict:
             "srsName": "EPSG:4326",
         },
     )
+
+
+def region_boundary(region: Region) -> dict:
+    """The region's outline as a GeoJSON MultiPolygon, rounded to about 100 m."""
+    # A pinned release, so the cached copy never goes stale.
+    ne = cached(CACHE_DIR / "natural_earth_admin1.json", lambda: get_json(NATURAL_EARTH_URL), False)
+    geometry = next(
+        (f["geometry"] for f in ne["features"] if f["properties"].get("iso_3166_2") == region.iso),
+        None,
+    )
+    if geometry is None:
+        raise ValueError(f"Natural Earth has no outline for {region.iso}")
+    return simplify_boundary(geometry)
+
+
+def simplify_boundary(geometry: dict) -> dict:
+    polygons = geometry["coordinates"]
+    if geometry["type"] == "Polygon":
+        polygons = [polygons]
+    result = []
+    for polygon in polygons:
+        rings = [_round_ring(ring) for ring in polygon]
+        if len(rings[0]) < 4:
+            continue  # an islet that rounding collapsed
+        result.append([r for r in rings if len(r) >= 4])
+    return {"type": "MultiPolygon", "coordinates": result}
+
+
+def _round_ring(ring: list) -> list:
+    out: list[list[float]] = []
+    for lon, lat, *_ in ring:
+        point = [round(lon, 3), round(lat, 3)]
+        if not out or out[-1] != point:
+            out.append(point)
+    return out
+
+
+def bounding_box(boundary: dict) -> tuple[float, float, float, float]:
+    """(south, west, north, east) of a MultiPolygon."""
+    points = [p for polygon in boundary["coordinates"] for p in polygon[0]]
+    lons = [p[0] for p in points]
+    lats = [p[1] for p in points]
+    return min(lats), min(lons), max(lats), max(lons)
 
 
 # --------------------------------------------------------------------------
@@ -665,61 +763,96 @@ def strip_nones(value):
 
 # --------------------------------------------------------------------------
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--refresh", action="store_true", help="ignore cached downloads")
-    parser.add_argument("--refresh-context", action="store_true",
-                        help="look up park/street names for unnamed washrooms again (slow)")
-    args = parser.parse_args()
-
-    rules_yaml = yaml.safe_load(RULES_PATH.read_text())
+def build_region(region: Region, cache_dir: Path, context_path: Path,
+                 refresh: bool = False, refresh_context: bool = False) -> dict:
+    """Fetch, normalise and merge every source of `region` into a region file dict."""
+    rules_yaml = region_rules(yaml.safe_load(RULES_PATH.read_text()), region.id)
     rules = ToiletRules(rules_yaml)
-
-    print("Fetching sources:")
-    osm = cached("osm", lambda: fetch_overpass(overpass_query(rules_yaml)), args.refresh)
-    afdc = cached("afdc", fetch_afdc, args.refresh)
-    vancouver = cached("vancouver", fetch_vancouver, args.refresh)
-    rest_areas = cached("databc_rest_areas", fetch_rest_areas, args.refresh)
-    ocm_key = os.environ.get("OCM_API_KEY")
-    ocm = cached("ocm", lambda: fetch_ocm(ocm_key), args.refresh) if ocm_key else []
-    if not ocm_key:
-        print("  ocm: skipped (set OCM_API_KEY to include Open Charge Map)")
-
-    context = load_context(
-        [osm_key(el) for el in osm["elements"] if needs_context(el)], args.refresh_context
-    )
-
+    want = set(region.sources)
+    used: list[str] = []
     pois: list[dict] = []
-    pois += [p for el in osm["elements"] if (p := osm_element_to_poi(el, rules, context))]
-    pois += [afdc_to_poi(st) for st in afdc["fuel_stations"]]
-    pois += [p for row in vancouver if (p := vancouver_to_poi(row))]
-    pois += [rest_area_to_poi(f) for f in rest_areas["features"]]
-    pois += [p for item in ocm if (p := ocm_to_poi(item))]
+
+    print(f"Fetching sources for {region.name}:")
+    if "osm" in want:
+        osm = cached(cache_dir / "osm.json",
+                     lambda: fetch_overpass(overpass_query(rules_yaml, region.iso)), refresh)
+        context = load_context(
+            [osm_key(el) for el in osm["elements"] if needs_context(el)], context_path, refresh_context
+        )
+        pois += [p for el in osm["elements"] if (p := osm_element_to_poi(el, rules, context))]
+        used.append("osm")
+    if "afdc" in want:
+        afdc = cached(cache_dir / "afdc.json", lambda: fetch_afdc(region), refresh)
+        pois += [afdc_to_poi(st) for st in afdc["fuel_stations"]]
+        used.append("afdc")
+    if "vancouver" in want:
+        vancouver = cached(cache_dir / "vancouver.json", fetch_vancouver, refresh)
+        pois += [p for row in vancouver if (p := vancouver_to_poi(row))]
+        used.append("vancouver")
+    if "databc" in want:
+        rest_areas = cached(cache_dir / "databc_rest_areas.json", fetch_rest_areas, refresh)
+        pois += [rest_area_to_poi(f) for f in rest_areas["features"]]
+        used.append("databc")
+    if "ocm" in want:
+        if ocm_key := os.environ.get("OCM_API_KEY"):
+            boundary = region_boundary(region)
+            ocm = cached(cache_dir / "ocm.json", lambda: fetch_ocm(ocm_key, region, boundary), refresh)
+            pois += [p for item in ocm if (p := ocm_to_poi(item))]
+            used.append("ocm")
+        else:
+            print("  ocm: skipped (set OCM_API_KEY to include Open Charge Map)")
 
     raw_count = len(pois)
     pois.sort(key=lambda p: SOURCE_PRIORITY[p["source"]])
     pois = merge(pois, same_place)
     pois = [strip_nones(p) for p in pois]
     pois.sort(key=lambda p: p["id"])
+    print(f"{raw_count} records -> {len(pois)} POIs after merging duplicates")
 
-    counts: dict[str, int] = {}
-    for p in pois:
-        counts[p["kind"]] = counts.get(p["kind"], 0) + 1
-    with_toilet = sum(1 for p in pois if "toilet" in p)
-
-    output = {
+    return {
+        "schema": SCHEMA_VERSION,
+        "id": region.id,
+        "region": region.name,
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "region": "British Columbia",
+        "sources": sorted(used, key=SOURCE_PRIORITY.get),
         "pois": pois,
     }
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
 
-    print(f"\n{raw_count} records -> {len(pois)} POIs after merging duplicates")
+
+def write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+
+
+def print_summary(output: dict) -> None:
+    counts: dict[str, int] = {}
+    for p in output["pois"]:
+        counts[p["kind"]] = counts.get(p["kind"], 0) + 1
     for kind, n in sorted(counts.items()):
         print(f"  {kind:9} {n}")
-    print(f"  with a washroom: {with_toilet}")
-    print(f"Wrote {OUTPUT_PATH.relative_to(ROOT)} ({OUTPUT_PATH.stat().st_size / 1e6:.1f} MB)")
+    print(f"  with a washroom: {sum(1 for p in output['pois'] if 'toilet' in p)}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--region", required=True, help="region id from data/regions.yaml")
+    parser.add_argument("--out", type=Path, help="output file (default data/out/<region>.json)")
+    parser.add_argument("--refresh", action="store_true", help="ignore cached downloads")
+    parser.add_argument("--refresh-context", action="store_true",
+                        help="look up park/street names for unnamed washrooms again (slow)")
+    args = parser.parse_args()
+
+    regions = load_regions()
+    if args.region not in regions:
+        sys.exit(f"unknown region {args.region!r}; known: {', '.join(regions)}")
+    region = regions[args.region]
+    cache_dir = CACHE_DIR / region.id
+    output = build_region(region, cache_dir, cache_dir / "osm_context.json",
+                          args.refresh, args.refresh_context)
+    print_summary(output)
+    out = args.out or OUT_DIR / f"{region.id}.json"
+    write_json(out, output)
+    print(f"Wrote {out} ({out.stat().st_size / 1e6:.1f} MB)")
 
 
 if __name__ == "__main__":

@@ -13,3 +13,4 @@ DerivedData/
 /data/cache
 __pycache__/
 .venv/
+/data/out

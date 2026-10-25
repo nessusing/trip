@@ -118,3 +118,39 @@ def test_unnamed_toilet_gets_context():
     poi = build.osm_element_to_poi(el, RULES, {"n5": {"place": "Stanley Park"}})
     assert poi["place"] == "Stanley Park"
     assert poi["street"] is None
+
+
+def test_region_brands_add_to_and_replace_global_ones():
+    rules = {
+        "brands": [{"name": "Shell", "access": "customers"}, {"name": "IKEA", "access": "customers"}],
+        "categories": [],
+        "regions": {"wa": {"brands": [{"name": "shell", "access": "public"},
+                                      {"name": "Taco Bell", "access": "customers"}]}},
+    }
+    wa = build.ToiletRules(build.region_rules(rules, "wa"))
+    assert wa.match({"brand": "Shell"}) == "public"
+    assert wa.match({"brand": "Taco Bell"}) == "customers"
+    assert wa.match({"brand": "IKEA"}) == "customers"
+    assert build.ToiletRules(build.region_rules(rules, "bc")).match({"brand": "Taco Bell"}) is None
+
+
+def test_overpass_query_uses_region_area():
+    query = build.overpass_query({"brands": [{"name": "A&W"}], "categories": []}, "US-WA")
+    assert 'area["ISO3166-2"="US-WA"]' in query
+    assert "area.bc" not in query
+
+
+def test_regions_yaml_loads():
+    regions = build.load_regions()
+    assert regions["bc"].iso == "CA-BC"
+    assert "databc" in regions["bc"].sources
+    assert regions["wa"].every_days > 0
+
+
+def test_simplify_boundary_rounds_and_drops_collapsed_islets():
+    big = [[-123.00001, 49.0], [-122.0, 49.0], [-122.0, 50.0], [-123.0, 50.0], [-123.0, 49.0]]
+    islet = [[-124.0, 48.0], [-124.0001, 48.0], [-124.0, 48.0001], [-124.0, 48.0]]
+    result = build.simplify_boundary({"type": "MultiPolygon", "coordinates": [[big], [islet]]})
+    assert result["coordinates"] == [[[[-123.0, 49.0], [-122.0, 49.0], [-122.0, 50.0], [-123.0, 50.0],
+                                       [-123.0, 49.0]]]]
+    assert build.bounding_box(result) == (49.0, -123.0, 50.0, -122.0)

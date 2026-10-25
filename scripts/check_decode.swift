@@ -1,5 +1,5 @@
 // Decodes pois.json with the app's own model on Linux (no simulator needed).
-// Run: scripts/check-data.sh
+// Run: scripts/test-swift.sh FILE, or build it with scripts/build-decoder.sh
 import Foundation
 
 let url = URL(fileURLWithPath: CommandLine.arguments[1])
