@@ -1,4 +1,4 @@
-// Decodes pois.json with the app's own model on Linux (no simulator needed).
+// Decodes a region file with the app's own model on Linux (no simulator needed).
 // Run: scripts/test-swift.sh FILE, or build it with scripts/build-decoder.sh
 import Foundation
 

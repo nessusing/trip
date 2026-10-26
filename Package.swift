@@ -18,8 +18,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "Trip",
-            resources: [.copy("Resources/pois.json")]
+            name: "Trip"
         ),
     ]
 )

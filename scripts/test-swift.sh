@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# Run the Foundation-only Swift code on Linux: hours logic tests, then a
-# decode check of each region file given (default: the bundled pois.json).
+# Run the Foundation-only Swift code on Linux: hours and data-sync tests, then
+# a decode check of each region file given.
 #   scripts/test-swift.sh [data/out/bc.json ...]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
+model=(Sources/Trip/POIModel.swift Sources/Trip/OpeningHours.swift Sources/Trip/DataSync.swift)
 
 # Only a file named main.swift may contain top-level code.
-mkdir -p "$out/hours"
-cp scripts/test_hours.swift "$out/hours/main.swift"
-swiftc Sources/Trip/POIModel.swift Sources/Trip/OpeningHours.swift "$out/hours/main.swift" -o "$out/test_hours"
-"$out/test_hours"
+for t in hours sync; do
+  mkdir -p "$out/$t"
+  cp "scripts/test_$t.swift" "$out/$t/main.swift"
+  swiftc "${model[@]}" "$out/$t/main.swift" -o "$out/test_$t"
+  "$out/test_$t"
+done
 
-scripts/build-decoder.sh "$out/check_decode"
-files=("$@")
-[ ${#files[@]} -gt 0 ] || files=(Sources/Trip/Resources/pois.json)
-for f in "${files[@]}"; do "$out/check_decode" "$f"; done
+if [ $# -gt 0 ]; then
+  scripts/build-decoder.sh "$out/check_decode"
+  for f in "$@"; do "$out/check_decode" "$f"; done
+fi

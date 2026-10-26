@@ -13,9 +13,13 @@ struct NearbySheet: View {
     var body: some View {
         NavigationStack {
             List {
-                if let error = store.loadError {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
+                if store.loaded && store.pois.isEmpty && !store.isSyncing {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("No data yet. Connect to the internet to download.", systemImage: "icloud.and.arrow.down")
+                        if let error = store.syncError {
+                            Text(error).font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 if locationDenied {
                     Label("Location is off. Drag the map to search elsewhere.", systemImage: "location.slash")
@@ -70,7 +74,7 @@ struct NearbySheet: View {
     }
 
     private var title: String {
-        if store.pois.isEmpty && store.loadError == nil { return "Loading…" }
+        if store.pois.isEmpty && (!store.loaded || store.isSyncing) { return "Loading…" }
         return items.count == 1 ? "1 place" : "\(items.count) places"
     }
 }

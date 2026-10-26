@@ -18,6 +18,8 @@ VS Code 里也可以按 `Ctrl+Shift+B`（"Deploy to iPhone" 任务）。用的�
 
 数据由 GitHub Actions（[.github/workflows/data.yml](.github/workflows/data.yml)）每天检查一次，到期的地区重新生成，发布到 `data` 分支，App 从那里下载。
 
+App 不打包数据：启动时和回到前台时（最多每 6 小时一次）检查 `data` 分支的 `manifest.json`，有变化的地区才下载，存在手机上离线可用。"关于"页能看到各地区的数据日期，也可以手动检查更新。全新安装后第一次打开需要联网。
+
 - **改地区或更新频率**：编辑 [data/regions.yaml](data/regions.yaml)（GitHub 网页上改就行），下一次运行生效
 - **立刻更新**：GitHub → Actions → Data → Run workflow，填地区 id（如 `bc,wa`），留空则只更新到期的
 - **失败**：该地区保留上一版，GitHub 会发邮件；新数据点数比上一版少 20% 以上、或 App 解码不了，都算失败
@@ -41,7 +43,7 @@ scripts/test-swift.sh data/out/wa.json       # 确认 App 能解码
 
 ```bash
 uv run --with pytest --with pyyaml --with requests pytest data   # 数据脚本、营业时间解析
-scripts/test-swift.sh [文件...]                                  # App 的营业时间判断、日出日落，以及解码数据文件
+scripts/test-swift.sh [文件...]                                  # App 的营业时间、日出日落、数据下载逻辑，以及解码给定的数据文件
 ```
 
 ## 目录
@@ -49,10 +51,11 @@ scripts/test-swift.sh [文件...]                                  # App 的营�
 ```
 Sources/Trip/
   TripApp.swift          入口
-  POIModel.swift         pois.json 的数据结构（只依赖 Foundation，Linux 上可测）
+  POIModel.swift         地区数据文件的结构（只依赖 Foundation，Linux 上可测）
+  DataSync.swift         从 data 分支下载、更新地区数据（只依赖 Foundation，Linux 上可测）
   OpeningHours.swift     营业状态判断 + 日出日落计算（只依赖 Foundation）
   POI.swift              分类、过滤、图标、显示名称
-  POIStore.swift         加载数据 + 半径查询
+  POIStore.swift         加载已下载的数据、检查更新、半径查询
   LocationManager.swift  定位（仅"使用 App 期间"）
   MapsLauncher.swift     跳 Google Maps / Apple Maps
   Views/                 地图、过滤条、底部列表、详情、关于

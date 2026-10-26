@@ -1,6 +1,6 @@
 import Foundation
 
-/// The shape of `pois.json`, produced by `data/build.py`.
+/// The shape of a region file (`regions/<id>.json` on the data branch), produced by `data/build.py`.
 struct POIFile: Decodable {
     let generated: String
     let region: String

@@ -12,27 +12,83 @@ struct NearbyPOI: Identifiable, Equatable {
     var id: String { poi.id }
 }
 
-/// Holds every POI from the bundled `pois.json` and answers radius queries.
+/// Holds every POI from the downloaded region files, keeps them up to date and
+/// answers radius queries.
 @MainActor
 @Observable
 final class POIStore {
-    private(set) var pois: [POI] = []
-    private(set) var generated: String?
-    private(set) var loadError: String?
+    /// How often coming back to the app checks for new data.
+    static let checkInterval: TimeInterval = 6 * 3600
 
+    private(set) var pois: [POI] = []
+    /// Regions present on the phone.
+    private(set) var regions: [RegionEntry] = []
+    private(set) var isSyncing = false
+    private(set) var lastChecked: Date?
+    /// Why the last check or load failed; nil once one succeeds.
+    private(set) var syncError: String?
+    /// True once local data has been read, so "no places" means none were downloaded.
+    private(set) var loaded = false
+
+    private let sync: RegionSync
+
+    init() {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        var directory = support.appendingPathComponent("Data", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Re-downloadable, so keep it out of iCloud backups.
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? directory.setResourceValues(values)
+        sync = RegionSync(directory: directory) { url in
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw URLError(.badServerResponse)
+            }
+            return data
+        }
+    }
+
+    /// Reads the regions already on the phone, then checks for newer ones.
     func load() async {
-        guard pois.isEmpty else { return }
+        await reload()
+        loaded = true
+        await checkForUpdates(force: true)
+    }
+
+    /// Downloads changed regions. Unless `force`, does nothing if the last check
+    /// was recent.
+    func checkForUpdates(force: Bool) async {
+        guard !isSyncing else { return }
+        if !force, let lastChecked, Date.now.timeIntervalSince(lastChecked) < Self.checkInterval { return }
+        isSyncing = true
+        defer { isSyncing = false }
         do {
-            let file = try await Task.detached(priority: .userInitiated) {
-                guard let url = Bundle.module.url(forResource: "pois", withExtension: "json") else {
-                    throw CocoaError(.fileNoSuchFile)
-                }
-                return try JSONDecoder().decode(POIFile.self, from: Data(contentsOf: url))
-            }.value
-            pois = file.pois
-            generated = file.generated
+            let result = try await sync.sync()
+            lastChecked = .now
+            syncError = result.failed.isEmpty
+                ? nil
+                : "Couldn't update \(result.failed.joined(separator: ", ").uppercased())."
+            if result.changed { await reload() }
+        } catch SyncError.appTooOld {
+            syncError = "New data needs a newer version of the app."
         } catch {
-            loadError = "Couldn't load place data: \(error.localizedDescription)"
+            syncError = "Couldn't check for new data: \(error.localizedDescription)"
+        }
+    }
+
+    private func reload() async {
+        let sync = sync
+        do {
+            let (manifest, files) = try await Task.detached(priority: .userInitiated) {
+                (sync.localManifest(), try sync.loadAll())
+            }.value
+            regions = manifest?.regions ?? []
+            pois = files.flatMap(\.pois)
+        } catch {
+            syncError = "Couldn't read place data: \(error.localizedDescription)"
         }
     }
 
