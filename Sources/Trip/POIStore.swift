@@ -8,6 +8,8 @@ struct NearbyPOI: Identifiable, Equatable {
     let distance: Double
     /// Open or closed at query time; nil when the hours are unknown.
     let status: OpenStatus?
+    /// In route mode, where it is along the route; nil if it's far from it.
+    var along: AlongRoute?
 
     var id: String { poi.id }
 }

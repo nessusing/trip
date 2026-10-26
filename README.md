@@ -1,6 +1,6 @@
 # Trip
 
-在地图上找附近的加油站、EV 充电桩、休息区和厕所。覆盖 BC 全省。规格见 [SPEC.md](SPEC.md)。
+在地图上找附近或沿路线的加油站、EV 充电桩、休息区和厕所。覆盖 BC 和 WA。规格见 [SPEC.md](SPEC.md)。
 
 ## 装到手机上
 
@@ -43,7 +43,7 @@ scripts/test-swift.sh data/out/wa.json       # 确认 App 能解码
 
 ```bash
 uv run --with pytest --with pyyaml --with requests pytest data   # 数据脚本、营业时间解析
-scripts/test-swift.sh [文件...]                                  # App 的营业时间、日出日落、数据下载逻辑，以及解码给定的数据文件
+scripts/test-swift.sh [文件...]                                  # App 的营业时间、日出日落、数据下载、路线计算，以及解码给定的数据文件
 ```
 
 ## 目录
@@ -56,6 +56,9 @@ Sources/Trip/
   OpeningHours.swift     营业状态判断 + 日出日落计算（只依赖 Foundation）
   POI.swift              分类、过滤、图标、显示名称
   POIStore.swift         加载已下载的数据、检查更新、半径查询
+  RouteMath.swift        路线吸附、沿路距离、走廊索引、覆盖范围（只依赖 Foundation，Linux 上可测）
+  TripPlanner.swift      目的地、路线、沿路线移动的搜索圆心，保存行程
+  DestinationSearch.swift 目的地搜索联想
   LocationManager.swift  定位（仅"使用 App 期间"）
   MapsLauncher.swift     跳 Google Maps / Apple Maps
   Views/                 地图、过滤条、底部列表、详情、关于
