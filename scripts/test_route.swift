@@ -89,7 +89,8 @@ for i in 0..<26_000 {
 let started = Date()
 let big = Corridor(route: long, pois: many)
 let elapsed = Date().timeIntervalSince(started)
-check(elapsed < 2, "corridor build took \(elapsed) s")
+// Debug builds on CI are slow; this only catches an accidental all-pairs search (minutes).
+check(elapsed < 10, "corridor build took \(elapsed) s")
 print("Corridor: \(big.entries.count) of \(many.count) POIs near a \(Int(long.length / 1000)) km route in \(String(format: "%.2f", elapsed)) s")
 
 if failures > 0 {
