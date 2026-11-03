@@ -95,10 +95,12 @@ final class POIStore {
     }
 
     /// POIs within `radiusKm` of `center` that pass `filters`, nearest first.
+    /// `extra` are places from outside the region files (live GasBuddy stations).
     func nearby(
         center: CLLocationCoordinate2D,
         radiusKm: Double,
         filters: Filters,
+        extra: [POI] = [],
         now: Date = .now
     ) -> [NearbyPOI] {
         let radius = radiusKm * 1000
@@ -107,7 +109,7 @@ final class POIStore {
         let lonDelta = radiusKm / (111.0 * max(cos(center.latitude * .pi / 180), 0.01))
 
         var result: [NearbyPOI] = []
-        for poi in pois {
+        for poi in [pois, extra].joined() {
             guard abs(poi.lat - center.latitude) <= latDelta,
                   abs(poi.lon - center.longitude) <= lonDelta,
                   filters.categories.contains(where: { poi.matches($0, filters) })

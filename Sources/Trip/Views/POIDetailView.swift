@@ -5,6 +5,8 @@ struct POIDetailView: View {
     /// Metres from the search centre, when known.
     let distance: Double?
 
+    @Environment(FuelPrices.self) private var fuel
+
     var body: some View {
         List {
             Section {
@@ -46,6 +48,7 @@ struct POIDetailView: View {
 
             if let toilet = poi.toilet { washroom(toilet) }
             if let ev = poi.ev { charger(ev) }
+            if poi.kind == .fuel { prices }
             if let fuel = poi.fuel { gas(fuel) }
             if let rest = poi.restArea { restArea(rest) }
 
@@ -57,6 +60,40 @@ struct POIDetailView: View {
         }
         .navigationTitle(poi.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { fuel.detailOpened(poi) }
+    }
+
+    private var prices: some View {
+        let now = Date.now
+        let quotes = fuel.station(for: poi).map { station in
+            FuelGrade.allCases.compactMap { grade in station.quote(grade, now: now).map { (grade, $0) } }
+        }
+        return Section {
+            if let quotes, !quotes.isEmpty {
+                ForEach(quotes, id: \.0) { grade, quote in
+                    LabeledContent(grade.label) {
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text(quote.text).monospacedDigit()
+                                .foregroundStyle(quote.isStale(now: now) ? Color.secondary : Color.primary)
+                            Text([quote.age(now: now), quote.cashText].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else if !fuel.online {
+                Text("Prices need internet").foregroundStyle(.secondary)
+            } else if fuel.loading {
+                ProgressView()
+            } else if quotes != nil || fuel.covered(poi.coordinate) {
+                Text("No recent price").foregroundStyle(.secondary)
+            } else {
+                Text("No price yet").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Prices")
+        } footer: {
+            Text("Reported by GasBuddy users. The price at the pump may have changed since.")
+        }
     }
 
     private func washroom(_ t: ToiletInfo) -> some View {

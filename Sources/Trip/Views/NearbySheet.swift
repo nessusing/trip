@@ -13,6 +13,7 @@ struct NearbySheet: View {
     @Environment(POIStore.self) private var store
     @Environment(TripPlanner.self) private var planner
     @Environment(DestinationSearch.self) private var search
+    @Environment(FuelPrices.self) private var fuel
     @State private var showAbout = false
     @State private var searching = false
 
@@ -107,6 +108,9 @@ struct NearbySheet: View {
                     }
                 }
             }
+            if (fuel.client.isPaused() || fuel.client.needsHuman) && items.contains(where: { $0.poi.kind == .fuel }) {
+                priceNotice
+            }
             if locationDenied {
                 Label("Location is off. Drag the map to search elsewhere.", systemImage: "location.slash")
                     .font(.footnote)
@@ -128,6 +132,19 @@ struct NearbySheet: View {
         .listStyle(.plain)
     }
 
+    /// Why gas prices aren't coming in.
+    private var priceNotice: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let until = fuel.client.pausedUntil ?? context.date
+            let minutes = max(1, Int((until.timeIntervalSince(context.date) / 60).rounded(.up)))
+            Label(fuel.client.isPaused(now: context.date)
+                  ? "Gas prices paused · back in \(minutes) min"
+                  : "Gas prices need a check: About › Fix GasBuddy",
+                  systemImage: "fuelpump.slash")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
     private var title: String {
         if store.pois.isEmpty && (!store.loaded || store.isSyncing) { return "Loading…" }
         return items.count == 1 ? "1 place" : "\(items.count) places"
@@ -137,6 +154,9 @@ struct NearbySheet: View {
 struct POIRow: View {
     let item: NearbyPOI
     var routeMode = false
+
+    @Environment(FuelPrices.self) private var fuel
+    @AppStorage(FuelGrade.storageKey) private var grade = FuelGrade.regular
 
     var body: some View {
         let poi = item.poi
@@ -191,11 +211,25 @@ struct POIRow: View {
     }
 
     private func subtitle(_ poi: POI) -> Text {
-        let details = Text(details(poi))
+        var details = Text(details(poi))
+        if let price = price(poi) { details = price + Text(" · ") + details }
         guard let status = item.status else { return details }
         return Text(status.shortLabel(now: .now))
             .foregroundStyle(status.isOpen ? Color.green : Color.red)
             + Text(" · ") + details
+    }
+
+    /// "178.9¢/L 2h ago" for gas stations; faded when over a day old.
+    private func price(_ poi: POI) -> Text? {
+        guard poi.kind == .fuel else { return nil }
+        let now = Date.now
+        if let quote = fuel.quote(for: poi, grade: grade, now: now) {
+            return Text("\(quote.text) \(quote.age(now: now))")
+                .foregroundStyle(quote.isStale(now: now) ? Color.secondary : Color.primary)
+        }
+        if !fuel.online { return Text("Price needs internet") }
+        if fuel.covered(poi.coordinate) { return Text("No recent price") }
+        return nil
     }
 
     private func details(_ poi: POI) -> String {

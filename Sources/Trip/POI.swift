@@ -131,6 +131,8 @@ extension POI {
     }
 
     var symbol: String {
+        // Live-only GasBuddy stations get the outline pump, so they read as "not in our data".
+        if source == "gasbuddy" { return "fuelpump" }
         guard kind == .venue else { return primaryCategory.symbol }
         return switch sub {
         case "cafe": "cup.and.saucer.fill"
@@ -154,6 +156,7 @@ extension POI {
         case "ocm": "Open Charge Map"
         case "vancouver": "City of Vancouver Open Data"
         case "databc": "BC Ministry of Transportation (DataBC)"
+        case "gasbuddy": "GasBuddy (live, not in OpenStreetMap)"
         default: source
         }
     }

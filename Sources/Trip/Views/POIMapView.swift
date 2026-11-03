@@ -47,6 +47,8 @@ struct POIMapView: UIViewRepresentable {
     /// In route mode, where the draggable search-centre handle sits.
     let scrubPoint: CLLocationCoordinate2D?
     @Binding var selected: POI?
+    /// POI id → gas price label shown under its marker.
+    var priceLabels: [String: String] = [:]
     /// Called when the user finishes moving the map.
     let onCenterChange: (CLLocationCoordinate2D) -> Void
     /// Called continuously while the handle is dragged, with the finger's position.
@@ -85,6 +87,7 @@ struct POIMapView: UIViewRepresentable {
         coordinator.updateDestination(on: map, destination: destination)
         coordinator.updateScrubHandle(on: map, at: scrubPoint)
         coordinator.updateAnnotations(on: map, items: Array(items.prefix(Self.markerLimit)))
+        coordinator.updatePrices(on: map, labels: priceLabels)
         coordinator.updateSelection(on: map, selected: selected)
     }
 
@@ -239,6 +242,17 @@ struct POIMapView: UIViewRepresentable {
             map.addAnnotations(added)
         }
 
+        /// Gas stations with a price show it as their always-visible marker label.
+        func updatePrices(on map: MKMapView, labels: [String: String]) {
+            for (id, annotation) in annotations {
+                let price = labels[id]
+                guard annotation.price != price else { continue }
+                annotation.price = price
+                annotation.title = price ?? annotation.poi.displayName
+                (map.view(for: annotation) as? MKMarkerAnnotationView)?.titleVisibility = price == nil ? .adaptive : .visible
+            }
+        }
+
         func updateSelection(on map: MKMapView, selected: POI?) {
             let current = map.selectedAnnotations.compactMap { $0 as? POIAnnotation }.first
             guard current?.poi.id != selected?.id else { return }
@@ -294,6 +308,7 @@ struct POIMapView: UIViewRepresentable {
             let color = UIColor(poi.primaryCategory.color)
             view?.markerTintColor = poi.isInferred ? color.withAlphaComponent(0.45) : color
             view?.displayPriority = poi.isInferred ? .defaultLow : .defaultHigh
+            view?.titleVisibility = annotation.price == nil ? .adaptive : .visible
             return view
         }
 
@@ -340,13 +355,16 @@ struct POIMapView: UIViewRepresentable {
 final class POIAnnotation: NSObject, MKAnnotation {
     let poi: POI
     let coordinate: CLLocationCoordinate2D
+    /// The gas price label, when there is one; it replaces the name as the title.
+    var price: String?
+    /// Dynamic so MapKit sees it change when a price arrives.
+    @objc dynamic var title: String?
 
     init(poi: POI) {
         self.poi = poi
         self.coordinate = poi.coordinate
+        self.title = poi.displayName
     }
-
-    var title: String? { poi.displayName }
 }
 
 final class RoutePolyline: MKPolyline {

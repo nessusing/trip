@@ -177,8 +177,12 @@ final class TripPlanner {
     }
 
     func along(_ poi: POI) -> AlongRoute? {
-        guard let route, let entry = corridor?.entry(for: poi.id) else { return nil }
-        return along(progress: entry.progress, route: route)
+        guard let route else { return nil }
+        if let entry = corridor?.entry(for: poi.id) { return along(progress: entry.progress, route: route) }
+        // Live GasBuddy stations aren't in the corridor index; snap them directly.
+        guard poi.source == "gasbuddy" else { return nil }
+        let snap = route.line.snap(LatLon(lat: poi.lat, lon: poi.lon))
+        return snap.offRoute <= Self.corridorWidth ? along(progress: snap.progress, route: route) : nil
     }
 
     /// Distance and time from me to the search centre.

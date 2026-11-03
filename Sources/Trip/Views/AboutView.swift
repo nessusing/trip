@@ -2,9 +2,18 @@ import SwiftUI
 
 struct AboutView: View {
     @Environment(POIStore.self) private var store
+    @Environment(FuelPrices.self) private var fuel
+    @State private var showGasBuddy = false
+    @AppStorage(FuelGrade.storageKey) private var fuelGrade = FuelGrade.regular
 
     var body: some View {
         List {
+            Section("Settings") {
+                Picker("Gas price shown", selection: $fuelGrade) {
+                    ForEach(FuelGrade.allCases) { Text($0.label).tag($0) }
+                }
+            }
+
             Section {
                 ForEach(store.regions, id: \.id) { region in
                     LabeledContent(region.name) {
@@ -37,8 +46,10 @@ struct AboutView: View {
                 }
             }
 
+            gasPrices
+
             Section {
-                ForEach(Self.sources.filter { usedSources.contains($0.id) }, id: \.id) { source in
+                ForEach(Self.sources.filter { usedSources.contains($0.id) } + [Self.gasBuddy], id: \.id) { source in
                     VStack(alignment: .leading, spacing: 4) {
                         Link(source.name, destination: source.url).font(.body.weight(.medium))
                         Text(source.detail).font(.footnote).foregroundStyle(.secondary)
@@ -52,6 +63,42 @@ struct AboutView: View {
         }
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showGasBuddy, onDismiss: { Task { await fuel.client.pageClosed() } }) {
+            NavigationStack {
+                GasBuddyPage(web: fuel.client.web)
+                    .ignoresSafeArea(edges: .bottom)
+                    .navigationTitle("GasBuddy")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showGasBuddy = false }
+                        }
+                    }
+            }
+        }
+    }
+
+    private var gasPrices: some View {
+        let client = fuel.client
+        return Section {
+            if let until = client.pausedUntil, until > .now {
+                LabeledContent("Status", value: "Paused until \(until.formatted(date: .omitted, time: .shortened))")
+            } else if let success = client.lastSuccess {
+                LabeledContent("Last update") {
+                    Text("\(success.at.formatted(.relative(presentation: .named))) via \(success.path)")
+                }
+            } else {
+                LabeledContent("Status", value: "No prices yet")
+            }
+            if let error = client.lastError {
+                Text(error).font(.footnote).foregroundStyle(.secondary)
+            }
+            Button("Fix GasBuddy") { showGasBuddy = true }
+        } header: {
+            Text("Gas prices")
+        } footer: {
+            Text("If prices stop coming in, open GasBuddy here and complete any \"verify you are human\" check.")
+        }
     }
 
     /// Sources used by the downloaded regions; all of them before any download.
@@ -67,6 +114,11 @@ struct AboutView: View {
         let detail: String
         let url: URL
     }
+
+    private static let gasBuddy = Source(
+        id: "gasbuddy", name: "GasBuddy",
+        detail: "Live gas prices reported by GasBuddy users, through GasBuddy's unofficial web API. Not affiliated with GasBuddy.",
+        url: URL(string: "https://www.gasbuddy.com")!)
 
     private static let sources = [
         Source(id: "osm", name: "OpenStreetMap",
@@ -85,4 +137,18 @@ struct AboutView: View {
                detail: "Highway rest areas from the BC Ministry of Transportation. Contains information licensed under the Open Government Licence – British Columbia.",
                url: URL(string: "https://catalogue.data.gov.bc.ca/dataset/ministry-of-transportation-mot-rest-area")!),
     ]
+}
+
+/// Hosts the hidden GasBuddy web view on screen so the user can click through a
+/// Cloudflare check. It goes back into hiding when the sheet closes.
+private struct GasBuddyPage: UIViewRepresentable {
+    let web: GasBuddyWeb
+
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        web.show(in: container)
+        return container
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }

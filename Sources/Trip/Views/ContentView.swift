@@ -8,6 +8,8 @@ struct ContentView: View {
     @Environment(LocationManager.self) private var location
     @Environment(TripPlanner.self) private var planner
     @Environment(DestinationSearch.self) private var search
+    @Environment(FuelPrices.self) private var fuel
+    @Environment(\.scenePhase) private var scenePhase
 
     // Remembered between launches.
     @AppStorage("radiusKm") private var radiusKm = 10.0
@@ -16,6 +18,7 @@ struct ContentView: View {
     @AppStorage("openNow") private var openNow = false
     @AppStorage("fastChargingOnly") private var fastChargingOnly = false
     @AppStorage("connectors") private var connectorsRaw = ""
+    @AppStorage(FuelGrade.storageKey) private var fuelGrade = FuelGrade.regular
 
     /// The centre of the visible map. It's the search centre too, except in
     /// route mode, where the search centre is on the route (`planner.searchPoint`).
@@ -57,7 +60,7 @@ struct ContentView: View {
     private var center: CLLocationCoordinate2D { planner.searchPoint ?? searchCenter }
 
     private var items: [NearbyPOI] {
-        var items = store.nearby(center: center, radiusKm: radiusKm, filters: filters)
+        var items = store.nearby(center: center, radiusKm: radiusKm, filters: filters, extra: fuel.extras)
         guard planner.route != nil else { return items }
         for i in items.indices { items[i].along = planner.along(items[i].poi) }
         // Along the route in driving order first, then places away from it, nearest first.
@@ -87,6 +90,7 @@ struct ContentView: View {
                 selectedRoute: planner.selectedRoute,
                 scrubPoint: planner.searchPoint,
                 selected: $selected,
+                priceLabels: priceLabels(items),
                 onCenterChange: {
                     searchCenter = $0
                     search.bias(to: $0)
@@ -137,6 +141,8 @@ struct ContentView: View {
             detent = collapsed
             location.start()
             planner.update(pois: store.pois, boundaries: store.regions.map(\.boundary))
+            fuel.update(pois: store.pois)
+            requestPrices()
         }
         .onChange(of: location.coordinate?.latitude) {
             guard let coordinate = location.coordinate else { return }
@@ -149,6 +155,13 @@ struct ContentView: View {
         }
         .onChange(of: store.regions) {
             planner.update(pois: store.pois, boundaries: store.regions.map(\.boundary))
+            fuel.update(pois: store.pois)
+        }
+        .onChange(of: [center.latitude, center.longitude, radiusKm]) { requestPrices() }
+        .onChange(of: categoriesRaw) { requestPrices() }
+        .onChange(of: scenePhase) {
+            // Back in the app after a while: prices around here may be due again.
+            if scenePhase == .active { requestPrices() }
         }
         .onChange(of: radiusKm) {
             camera = CameraRequest(center: center, radiusKm: radiusKm)
@@ -159,6 +172,24 @@ struct ContentView: View {
         .onChange(of: selected) {
             if selected != nil && detent == collapsed { detent = .medium }
         }
+    }
+
+    /// Price labels for the gas stations on the map, in the grade chosen in Settings.
+    private func priceLabels(_ items: [NearbyPOI]) -> [String: String] {
+        let now = Date.now
+        var labels: [String: String] = [:]
+        for item in items where item.poi.kind == .fuel {
+            if let quote = fuel.quote(for: item.poi, grade: fuelGrade, now: now) {
+                labels[item.id] = quote.mapLabel(now: now)
+            }
+        }
+        return labels
+    }
+
+    /// Live gas prices for the search circle, when gas stations are shown.
+    private func requestPrices() {
+        guard filters.categories.contains(.fuel) else { return }
+        fuel.centerChanged(center, radiusKm: radiusKm)
     }
 
     private func recenter() {
