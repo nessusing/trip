@@ -157,6 +157,7 @@ struct POIRow: View {
 
     @Environment(FuelPrices.self) private var fuel
     @AppStorage(FuelGrade.storageKey) private var grade = FuelGrade.regular
+    @AppStorage("openNow") private var openNow = false
 
     var body: some View {
         let poi = item.poi
@@ -213,7 +214,10 @@ struct POIRow: View {
     private func subtitle(_ poi: POI) -> Text {
         var details = Text(details(poi))
         if let price = price(poi) { details = price + Text(" · ") + details }
-        guard let status = item.status else { return details }
+        guard let status = item.status else {
+            // "Open now" can only hide places it knows are closed; flag the ones it can't judge.
+            return openNow ? Text("Hours unknown").foregroundStyle(.orange) + Text(" · ") + details : details
+        }
         return Text(status.shortLabel(now: .now))
             .foregroundStyle(status.isOpen ? Color.green : Color.red)
             + Text(" · ") + details

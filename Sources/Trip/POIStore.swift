@@ -95,12 +95,14 @@ final class POIStore {
     }
 
     /// POIs within `radiusKm` of `center` that pass `filters`, nearest first.
-    /// `extra` are places from outside the region files (live GasBuddy stations).
+    /// `extra` are places from outside the region files (live GasBuddy stations);
+    /// `hours` fills in opening hours our data lacks, by POI id.
     func nearby(
         center: CLLocationCoordinate2D,
         radiusKm: Double,
         filters: Filters,
         extra: [POI] = [],
+        hours: [String: [[[Int]]]] = [:],
         now: Date = .now
     ) -> [NearbyPOI] {
         let radius = radiusKm * 1000
@@ -116,7 +118,7 @@ final class POIStore {
             else { continue }
             let d = Geo.distance(center, poi.coordinate)
             guard d <= radius else { continue }
-            let status = poi.openStatus(at: now)
+            let status = poi.openStatus(at: now, fallback: hours[poi.id])
             if filters.openNow && status?.isOpen == false { continue }
             result.append(NearbyPOI(poi: poi, distance: d, status: status))
         }

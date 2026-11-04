@@ -60,7 +60,7 @@ struct ContentView: View {
     private var center: CLLocationCoordinate2D { planner.searchPoint ?? searchCenter }
 
     private var items: [NearbyPOI] {
-        var items = store.nearby(center: center, radiusKm: radiusKm, filters: filters, extra: fuel.extras)
+        var items = store.nearby(center: center, radiusKm: radiusKm, filters: filters, extra: fuel.extras, hours: fuel.hours)
         guard planner.route != nil else { return items }
         for i in items.indices { items[i].along = planner.along(items[i].poi) }
         // Along the route in driving order first, then places away from it, nearest first.
@@ -91,6 +91,7 @@ struct ContentView: View {
                 scrubPoint: planner.searchPoint,
                 selected: $selected,
                 priceLabels: priceLabels(items),
+                openNow: openNow,
                 onCenterChange: {
                     searchCenter = $0
                     search.bias(to: $0)
@@ -236,9 +237,10 @@ struct ContentView: View {
 
     private func next(_ category: Category) {
         let filters = filters
+        let hours = fuel.hours
         let poi = planner.jumpToNext(category) { poi in
             guard poi.matches(category, filters) else { return false }
-            return !filters.openNow || poi.openStatus(at: .now)?.isOpen != false
+            return !filters.openNow || poi.openStatus(at: .now, fallback: hours[poi.id])?.isOpen != false
         }
         if let point = planner.searchPoint { camera = CameraRequest(center: point, radiusKm: radiusKm) }
         if let poi { selected = poi }

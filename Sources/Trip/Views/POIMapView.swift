@@ -49,6 +49,8 @@ struct POIMapView: UIViewRepresentable {
     @Binding var selected: POI?
     /// POI id → gas price label shown under its marker.
     var priceLabels: [String: String] = [:]
+    /// With the "Open now" filter on, places with unknown hours are drawn faded.
+    var openNow = false
     /// Called when the user finishes moving the map.
     let onCenterChange: (CLLocationCoordinate2D) -> Void
     /// Called continuously while the handle is dragged, with the finger's position.
@@ -86,7 +88,7 @@ struct POIMapView: UIViewRepresentable {
         coordinator.updateCircle(on: map, center: searchCenter, radiusKm: radiusKm)
         coordinator.updateDestination(on: map, destination: destination)
         coordinator.updateScrubHandle(on: map, at: scrubPoint)
-        coordinator.updateAnnotations(on: map, items: Array(items.prefix(Self.markerLimit)))
+        coordinator.updateAnnotations(on: map, items: Array(items.prefix(Self.markerLimit)), openNow: openNow)
         coordinator.updatePrices(on: map, labels: priceLabels)
         coordinator.updateSelection(on: map, selected: selected)
     }
@@ -231,7 +233,7 @@ struct POIMapView: UIViewRepresentable {
             }
         }
 
-        func updateAnnotations(on map: MKMapView, items: [NearbyPOI]) {
+        func updateAnnotations(on map: MKMapView, items: [NearbyPOI], openNow: Bool) {
             let wanted = Set(items.map(\.id))
             let stale = annotations.filter { !wanted.contains($0.key) }
             map.removeAnnotations(Array(stale.values))
@@ -239,17 +241,27 @@ struct POIMapView: UIViewRepresentable {
 
             let added = items.filter { annotations[$0.id] == nil }.map { POIAnnotation(poi: $0.poi) }
             added.forEach { annotations[$0.poi.id] = $0 }
+            // "Open now" can only hide places it knows are closed; fade the ones it can't judge.
+            for item in items {
+                guard let annotation = annotations[item.id] else { continue }
+                let unknown = openNow && item.status == nil
+                guard annotation.hoursUnknown != unknown else { continue }
+                annotation.hoursUnknown = unknown
+                if let view = map.view(for: annotation) as? MKMarkerAnnotationView { style(view, for: annotation) }
+            }
             map.addAnnotations(added)
         }
 
-        /// Gas stations with a price show it as their always-visible marker label.
+        /// Gas stations with a price show it as their always-visible marker label,
+        /// with the brand underneath so you can tell which station it is.
         func updatePrices(on map: MKMapView, labels: [String: String]) {
             for (id, annotation) in annotations {
                 let price = labels[id]
                 guard annotation.price != price else { continue }
                 annotation.price = price
                 annotation.title = price ?? annotation.poi.displayName
-                (map.view(for: annotation) as? MKMarkerAnnotationView)?.titleVisibility = price == nil ? .adaptive : .visible
+                annotation.subtitle = price == nil ? nil : annotation.poi.brandLabel
+                if let view = map.view(for: annotation) as? MKMarkerAnnotationView { style(view, for: annotation) }
             }
         }
 
@@ -301,15 +313,21 @@ struct POIMapView: UIViewRepresentable {
             guard let annotation = annotation as? POIAnnotation else { return nil }
             let view = map.dequeueReusableAnnotationView(withIdentifier: Self.markerID, for: annotation)
                 as? MKMarkerAnnotationView
-            let poi = annotation.poi
             view?.clusteringIdentifier = "poi"
-            view?.glyphImage = UIImage(systemName: poi.symbol)
-            // Guessed washrooms are drawn faded so they read as "maybe".
-            let color = UIColor(poi.primaryCategory.color)
-            view?.markerTintColor = poi.isInferred ? color.withAlphaComponent(0.45) : color
-            view?.displayPriority = poi.isInferred ? .defaultLow : .defaultHigh
-            view?.titleVisibility = annotation.price == nil ? .adaptive : .visible
+            view?.glyphImage = UIImage(systemName: annotation.poi.symbol)
+            if let view { style(view, for: annotation) }
             return view
+        }
+
+        /// The parts of a marker that change with its price and hours.
+        private func style(_ view: MKMarkerAnnotationView, for annotation: POIAnnotation) {
+            // Guessed washrooms and places of unknown hours are faded so they read as "maybe".
+            let faded = annotation.poi.isInferred || annotation.hoursUnknown
+            let color = UIColor(annotation.poi.primaryCategory.color)
+            view.markerTintColor = faded ? color.withAlphaComponent(0.45) : color
+            view.displayPriority = faded ? .defaultLow : .defaultHigh
+            view.titleVisibility = annotation.price == nil ? .adaptive : .visible
+            view.subtitleVisibility = annotation.price == nil ? .adaptive : .visible
         }
 
         func mapView(_ map: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -359,6 +377,10 @@ final class POIAnnotation: NSObject, MKAnnotation {
     var price: String?
     /// Dynamic so MapKit sees it change when a price arrives.
     @objc dynamic var title: String?
+    /// The gas station's brand, shown under its price.
+    @objc dynamic var subtitle: String?
+    /// "Open now" is on and we don't know this place's hours.
+    var hoursUnknown = false
 
     init(poi: POI) {
         self.poi = poi

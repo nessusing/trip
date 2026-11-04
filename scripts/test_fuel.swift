@@ -112,6 +112,25 @@ check(pairs["g-addr"] == "o-addr", "same street address 400 m apart")
 check(pairs["g-close"] == "o-busy" && pairs["g-far"] == nil, "closest claim wins: \(pairs)")
 check(pairs["g-alone"] == nil, "nothing nearby")
 
+// GasBuddy's free-text hours.
+let everyDay = { (spans: [[Int]]) in Array(repeating: spans, count: 7) }
+check(HoursText.schedule("24/7") == everyDay([[0, 1440]]), "24/7")
+check(HoursText.schedule("Open 24 hours") == everyDay([[0, 1440]]), "open 24 hours")
+check(HoursText.schedule("Daily 6am-midnight") == everyDay([[360, 1440]]), "daily to midnight")
+check(HoursText.schedule("Mo-Su 06:00-23:00") == everyDay([[360, 1380]]), "OSM style")
+check(HoursText.schedule("6:00 AM - 11:00 PM") == everyDay([[360, 1380]]), "no days means every day")
+check(HoursText.schedule("Mon-Fri 6am-10pm, Sat-Sun 7:00 AM - 9:00 PM")
+      == Array(repeating: [[360, 1320]], count: 5) + Array(repeating: [[420, 1260]], count: 2), "weekdays and weekend")
+check(HoursText.schedule("Monday - Saturday: 6am to 11pm; Sunday: closed")
+      == Array(repeating: [[360, 1380]], count: 6) + [[]], "long day names, closed Sunday")
+check(HoursText.schedule("Fri 6pm-2am")?[4] == [[1080, 1560]], "past midnight")
+check(HoursText.schedule("Sat & Sun 12pm-12am")?[5] == [[720, 1440]], "noon to midnight, &")
+check(HoursText.schedule("Su-Mo 8am-8pm")?[0] == [[480, 1200]], "wrapping day range")
+check(HoursText.schedule("Hours vary") == nil, "free text we can't read")
+check(HoursText.schedule("") == nil && HoursText.schedule(nil) == nil, "empty")
+check(HoursText.schedule("Mon-Fri 25:00-26:00") == nil, "bad time")
+check(page.results[0].asPOI().open == everyDay([[0, 1440]]), "live-only station gets the schedule")
+
 if failures > 0 {
     print("\(failures) fuel test(s) failed")
     exit(1)

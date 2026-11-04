@@ -25,6 +25,8 @@ final class FuelPrices {
     private(set) var matchedPOI: [String: String] = [:]
     /// Stations GasBuddy has and we don't, as places.
     private(set) var extras: [POI] = []
+    /// Our POI id → GasBuddy's weekly hours, for matched stations where they could be read.
+    private(set) var hours: [String: [[[Int]]]] = [:]
     private(set) var loading = false
 
     @ObservationIgnored private var fetches: [(center: CLLocationCoordinate2D, at: Date)] = []
@@ -118,5 +120,6 @@ final class FuelPrices {
         let pairs = FuelMatcher.match(all, to: pois)
         matchedPOI = Dictionary(pairs.map { ($0.value, $0.key) }, uniquingKeysWith: { a, _ in a })
         extras = all.filter { pairs[$0.id] == nil }.map { $0.asPOI() }
+        hours = matchedPOI.compactMapValues { stations[$0]?.schedule }
     }
 }

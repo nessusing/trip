@@ -105,6 +105,13 @@ extension POI {
         }
     }
 
+    /// A gas station's brand, or failing that its name; nil when it has neither.
+    var brandLabel: String? {
+        [fuel?.brand, name]
+            .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+    }
+
     /// A short description of what kind of place this is.
     var kindLabel: String {
         switch kind {

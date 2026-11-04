@@ -118,8 +118,9 @@ enum OpeningHours {
 }
 
 extension POI {
-    func openStatus(at now: Date, calendar: Calendar = .current) -> OpenStatus? {
-        guard let open else { return nil }
+    /// `fallback` is used when our own data has no hours, e.g. GasBuddy's for a gas station.
+    func openStatus(at now: Date, fallback: [[[Int]]]? = nil, calendar: Calendar = .current) -> OpenStatus? {
+        guard let open = open ?? fallback else { return nil }
         return OpeningHours.status(open, at: now, latitude: lat, longitude: lon, calendar: calendar)
     }
 }

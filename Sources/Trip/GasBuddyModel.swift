@@ -44,6 +44,111 @@ struct GBStation: Decodable, Identifiable, Sendable {
     }
 
     var brand: String? { brands?.first?.name.flatMap { $0.isEmpty ? nil : $0 } }
+
+    /// The opening hours as a weekly schedule; nil when missing or not understood.
+    var schedule: [[[Int]]]? { HoursText.schedule(hours?.openingHours) }
+}
+
+/// Turns GasBuddy's free-text opening hours into the weekly schedule `OpeningHours`
+/// evaluates (7 days, Monday first, [start, end] minutes after midnight).
+/// GasBuddy doesn't document the text, so this takes the usual ways of writing
+/// hours ("24/7", "Mon-Fri 6am-10pm, Sat-Sun 7:00 AM - 9:00 PM", "Mo-Su 06:00-23:00",
+/// "Daily 6am-midnight") and returns nil for anything else.
+enum HoursText {
+    private static let day = #"(?:mon(?:day)?|mo|tue(?:s(?:day)?)?|tu|wed(?:nesday)?|we|thu(?:r(?:s(?:day)?)?)?|th|fri(?:day)?|fr|sat(?:urday)?|sa|sun(?:day)?|su)\b"#
+    private static let everyDay = #"(?:daily|every ?day|7 days(?: a week)?|all week)"#
+    /// A comma before a day name starts a new rule: "Mon-Fri 6am-10pm, Sat 7am-9pm".
+    private static let ruleComma = try! NSRegularExpression(pattern: #",\s*(?=\#(day)|\#(everyDay))"#)
+    private static let rule = try! NSRegularExpression(
+        pattern: #"^(\#(everyDay)|\#(day)(?:\s*(?:-|,|&|and)\s*\#(day))*)?\s*:?\s*(.*)$"#)
+    private static let everyDayOnly = try! NSRegularExpression(pattern: "^" + everyDay + "$")
+    private static let time = try! NSRegularExpression(pattern: #"^(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|a|p)?$"#)
+    private static let days = ["mo", "tu", "we", "th", "fr", "sa", "su"]
+
+    static func schedule(_ text: String?) -> [[[Int]]]? {
+        guard var s = text?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty
+        else { return nil }
+        for (from, to) in [("–", "-"), ("—", "-"), (" to ", "-"), ("a.m.", "am"), ("p.m.", "pm"), ("open ", "")] {
+            s = s.replacingOccurrences(of: from, with: to)
+        }
+        s = ruleComma.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: ";")
+
+        var week: [[[Int]]] = Array(repeating: [], count: 7)
+        var applied = false
+        // Later rules override earlier ones for the days they name, as in OSM.
+        for part in s.split(whereSeparator: { ";\n|".contains($0) }) {
+            let part = String(part).trimmingCharacters(in: .whitespaces)
+            guard !part.isEmpty else { continue }
+            guard let match = rule.firstMatch(in: part, range: NSRange(part.startIndex..., in: part)),
+                  let timesRange = Range(match.range(at: 2), in: part),
+                  let spans = spans(String(part[timesRange]))
+            else { return nil }
+            let dayText = Range(match.range(at: 1), in: part).map { String(part[$0]) }
+            guard let indices = dayText.map(dayIndices) ?? Array(0..<7) else { return nil }
+            for i in indices { week[i] = spans }
+            applied = true
+        }
+        return applied ? week : nil
+    }
+
+    /// "mon-fri", "sat & sun", "daily" → day indices, Monday = 0.
+    private static func dayIndices(_ text: String) -> [Int]? {
+        if everyDayOnly.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil { return Array(0..<7) }
+        var result: [Int] = []
+        let groups = text.replacingOccurrences(of: "&", with: ",").replacingOccurrences(of: " and ", with: ",")
+        for group in groups.split(separator: ",") {
+            let ends = group.split(separator: "-").map { days.firstIndex(of: String($0.trimmingCharacters(in: .whitespaces).prefix(2))) }
+            switch ends.count {
+            case 1:
+                guard let i = ends[0] else { return nil }
+                result.append(i)
+            case 2:
+                guard let i = ends[0], let j = ends[1] else { return nil }
+                result += i <= j ? Array(i...j) : Array(i..<7) + Array(0...j)
+            default:
+                return nil
+            }
+        }
+        return result
+    }
+
+    /// "6am-10pm, 11pm-1am" → [[360, 1320], [1380, 1500]]; "closed" → [].
+    private static func spans(_ text: String) -> [[Int]]? {
+        let text = text.trimmingCharacters(in: .whitespaces)
+        if ["closed", "off"].contains(text) { return [] }
+        if ["24/7", "24 hours", "24 hrs", "24hrs", "24h", "all day"].contains(text) { return [[0, 1440]] }
+        var result: [[Int]] = []
+        let pieces = text.replacingOccurrences(of: "&", with: ",").replacingOccurrences(of: " and ", with: ",")
+        for span in pieces.split(separator: ",") {
+            let ends = span.split(separator: "-").map { minutes(String($0).trimmingCharacters(in: .whitespaces)) }
+            guard ends.count == 2, var start = ends[0], var end = ends[1] else { return nil }
+            if start == 1440 { start = 0 }  // "midnight-6am"
+            if end == 1439 { end = 1440 }  // "11:59pm" means until midnight
+            if end == start { end += 1440 }  // round the clock
+            if end < start { end += 1440 }  // runs past midnight
+            result.append([start, end])
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    /// "6", "6am", "6:30 pm", "18:30", "noon", "midnight" → minutes after midnight.
+    private static func minutes(_ text: String) -> Int? {
+        if text == "noon" { return 720 }
+        if text == "midnight" { return 1440 }
+        guard let match = time.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let hourRange = Range(match.range(at: 1), in: text),
+              var hour = Int(text[hourRange])
+        else { return nil }
+        let minute = Range(match.range(at: 2), in: text).flatMap { Int(text[$0]) } ?? 0
+        guard minute < 60 else { return nil }
+        if let ampmRange = Range(match.range(at: 3), in: text) {
+            guard (1...12).contains(hour) else { return nil }
+            hour = hour % 12 + (text[ampmRange].hasPrefix("p") ? 12 : 0)
+        } else if hour > 24 || (hour == 24 && minute > 0) {
+            return nil
+        }
+        return hour * 60 + minute
+    }
 }
 
 /// The page of stations inside a GraphQL reply.
@@ -155,8 +260,7 @@ extension GBStation {
 
     /// A gas station GasBuddy knows and OpenStreetMap doesn't, shown as a live-only place.
     func asPOI() -> POI {
-        let allDay = [[0, 1440]]
-        let isAllDay = hours?.openingHours?.trimmingCharacters(in: .whitespaces) == "24/7"
+        let text = hours?.openingHours?.trimmingCharacters(in: .whitespacesAndNewlines)
         let place = [address?.line1, address?.locality]
             .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
@@ -167,8 +271,8 @@ extension GBStation {
             lat: latitude,
             lon: longitude,
             address: place.isEmpty ? nil : place.joined(separator: ", "),
-            hours: isAllDay ? "24 hours" : nil,
-            open: isAllDay ? Array(repeating: allDay, count: 7) : nil,
+            hours: text == "24/7" ? "24 hours" : text.flatMap { $0.isEmpty ? nil : $0 },
+            open: schedule,
             place: nil,
             street: nil,
             source: "gasbuddy",

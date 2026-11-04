@@ -21,7 +21,7 @@ struct POIDetailView: View {
                         Text([poi.kindLabel, distance.map { Geo.format(distance: $0) }]
                             .compactMap { $0 }.joined(separator: " · "))
                             .foregroundStyle(.secondary)
-                        if let status = poi.openStatus(at: .now) {
+                        if let status = poi.openStatus(at: .now, fallback: fuel.hours[poi.id]) {
                             Text(status.label(now: .now))
                                 .font(.subheadline.weight(.medium))
                                 .foregroundStyle(status.isOpen ? .green : .red)
@@ -44,6 +44,7 @@ struct POIDetailView: View {
                 Field("In", poi.name == nil ? nil : poi.place)
                 Field("Near", poi.address == nil ? poi.street : nil)
                 Field("Hours", poi.hours)
+                if poi.hours == nil { Field("Hours (GasBuddy)", fuel.station(for: poi)?.hours?.openingHours) }
             }
 
             if let toilet = poi.toilet { washroom(toilet) }
